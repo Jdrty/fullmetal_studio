@@ -1,4 +1,4 @@
-//! Retro-styled top toolbar.
+//! toolbar_basic
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,6 +19,8 @@ pub enum ToolbarAction {
     NewDir,
     OpenFolder,
     AddFileToProject,
+    SimTogglePanel,
+    DocsInstructionSet,
 }
 
 fn title_font(size: f32) -> FontId {
@@ -48,6 +50,7 @@ pub fn show_toolbar(
     active_file: Option<&Path>,
     workspace_root: &Path,
     is_dirty: bool,
+    sim_visible: bool,
 ) -> ToolbarAction {
     let mut action = ToolbarAction::None;
 
@@ -92,6 +95,31 @@ pub fn show_toolbar(
                         }
                         if ui.button("Add file to project").clicked() {
                             action = ToolbarAction::AddFileToProject;
+                            ui.close_menu();
+                        }
+                    },
+                );
+
+                let sim_label = if sim_visible { "SIM ▪" } else { "SIM" };
+                if ui
+                    .add(eframe::egui::Button::new(
+                        RichText::new(sim_label)
+                            .font(title_font(18.0))
+                            .color(START_GREEN),
+                    ).frame(false))
+                    .clicked()
+                {
+                    action = ToolbarAction::SimTogglePanel;
+                }
+
+                ui.menu_button(
+                    RichText::new("DOCS")
+                        .font(title_font(18.0))
+                        .color(START_GREEN),
+                    |ui| {
+                        apply_dropdown_style(ui);
+                        if ui.button("Instruction set").clicked() {
+                            action = ToolbarAction::DocsInstructionSet;
                             ui.close_menu();
                         }
                     },

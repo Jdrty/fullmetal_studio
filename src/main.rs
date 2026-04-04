@@ -1,7 +1,11 @@
-//! Native window using egui (immediate mode) via eframe.
+//! entry
 
+mod avr;
+mod docs;
 mod editor;
 mod gui;
+mod sim_panel;
+mod syntax;
 mod toolbar;
 mod welcome;
 

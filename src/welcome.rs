@@ -1,4 +1,4 @@
-//! Welcome screen and "create new project" form.
+//! welcome_screen
 
 use std::sync::{Arc, OnceLock};
 
@@ -7,20 +7,16 @@ use eframe::egui::{
 };
 use eframe::egui::text::{LayoutJob, TextFormat};
 
-/// Matrix-style neon green (reference ~#A0F0A0).
 pub const START_GREEN: Color32 = Color32::from_rgb(160, 240, 160);
 
 pub const START_GREEN_DIM: Color32 = Color32::from_rgb(100, 180, 100);
 
-/// Overall scale for welcome + new-project screens (**1** = smallest, **100** = largest).
-/// Drives text, spacing, and banner width together.
+
 pub const WELCOME_SIZE_PCT: u8 = 68;
 
-/// Gap between content and the nearest screen edge (all four sides).
 const MARGIN: f32 = 44.0;
 
-/// Reference size only used for measuring; the rendered title is scaled to
-/// fill the effective content width (after [`WELCOME_SIZE_PCT`]).
+
 const TITLE_REF_PX: f32 = 54.0;
 
 fn size_factor() -> f32 {
@@ -31,7 +27,7 @@ fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(Arc::from("lain_title")))
 }
 
-/// Pixel width of `text` at the given font size and extra letter spacing.
+/// text_width_px fontsize tracking
 fn measure_title_line(ui: &Ui, text: &str, size: f32, spacing: f32) -> f32 {
     let job = LayoutJob::single_section(
         text.to_owned(),
@@ -60,7 +56,7 @@ fn banner_size_for_width(w: f32) -> Vec2 {
     Vec2::new(w, w * (ph as f32 / pw as f32))
 }
 
-/// Shrinks `size` uniformly if it is taller than `max_h` (keeps aspect ratio).
+/// fit_height max_h aspect_keep
 fn clamp_banner_height(size: Vec2, max_h: f32) -> Vec2 {
     if max_h <= 0.0 || size.y <= max_h {
         return size;

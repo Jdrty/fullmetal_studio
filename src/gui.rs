@@ -1,4 +1,4 @@
-//! Window chrome, egui style, and main application shell.
+//! application shell
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,12 @@ use eframe::egui::{
     Frame, Id, Margin, RichText, Stroke, TextStyle, TopBottomPanel, Visuals, Window,
 };
 
+use crate::avr::assembler::assemble;
+use crate::avr::cpu::StepResult;
+use crate::avr::Cpu;
 use crate::editor::TextEditor;
+use crate::docs::show_isa_window;
+use crate::sim_panel::{show_sim_panel, SimAction, SimTab};
 use crate::toolbar::{show_toolbar, ToolbarAction};
 use crate::welcome::{
     show_create_project, show_welcome, CreateProjectAction, WelcomeAction, START_GREEN_DIM,
@@ -79,7 +84,7 @@ pub fn setup_style(ctx: &egui::Context) {
             .insert(TextStyle::Monospace, FontId::new(14.0, FontFamily::Monospace));
     });
 
-    // Required for `egui::include_image!` / `Image::new` with embedded PNG bytes.
+    // egui_embedded_png_bytes
     egui_extras::install_image_loaders(ctx);
 }
 
@@ -154,6 +159,16 @@ pub struct LainApp {
     editor: TextEditor,
     modal: ModalState,
     status: Option<StatusMessage>,
+    sim: Cpu,
+    show_sim: bool,
+    sim_tab: SimTab,
+    sim_last_result: Option<StepResult>,
+    show_isa: bool,
+    // auto_run_state
+    auto_running: bool,
+    ips: f64,
+    ips_sample_start: std::time::Instant,
+    ips_sample_steps: u64,
 }
 
 impl LainApp {
@@ -164,6 +179,15 @@ impl LainApp {
             editor: TextEditor::new(Id::new("main_editor")),
             modal: ModalState::None,
             status: None,
+            sim: Cpu::new(),
+            show_sim: false,
+            sim_tab: SimTab::Cpu,
+            sim_last_result: None,
+            show_isa: false,
+            auto_running: false,
+            ips: 0.0,
+            ips_sample_start: std::time::Instant::now(),
+            ips_sample_steps: 0,
         }
     }
 
@@ -235,7 +259,7 @@ impl LainApp {
     }
 
     fn save_all_files(&mut self) -> Result<String, String> {
-        // Only one in-memory buffer exists right now, so "save all" flushes it.
+        // single_buffer_save_all_flush
         self.save_current_file()?;
         Ok("Saved all tracked files.".to_string())
     }
@@ -370,6 +394,12 @@ impl LainApp {
                 Ok(msg) => self.set_status(msg),
                 Err(err) => self.set_error(err),
             },
+            ToolbarAction::SimTogglePanel => {
+                self.show_sim = !self.show_sim;
+            }
+            ToolbarAction::DocsInstructionSet => {
+                self.show_isa = true;
+            }
         }
     }
 
@@ -547,8 +577,30 @@ impl eframe::App for LainApp {
                         workspace.active_file.as_deref(),
                         &workspace.root,
                         self.editor.is_dirty(),
+                        self.show_sim,
                     );
                 });
+        }
+
+        // sim_panel_editor_only
+        let mut sim_action = SimAction::None;
+        if self.show_sim {
+            if matches!(self.phase, AppPhase::Editor { .. }) {
+                egui::SidePanel::right("sim_panel_container")
+                    .exact_width(340.0)
+                    .resizable(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        sim_action = show_sim_panel(
+                            ui,
+                            &self.sim,
+                            self.sim_last_result,
+                            &mut self.sim_tab,
+                            self.auto_running,
+                            self.ips,
+                        );
+                    });
+            }
         }
 
         egui::CentralPanel::default()
@@ -638,6 +690,83 @@ impl eframe::App for LainApp {
             self.handle_toolbar_action(toolbar_action);
         }
 
+        match sim_action {
+            SimAction::None => {}
+            SimAction::Assemble => {
+                let source = self.editor.source().to_owned();
+                match assemble(&source) {
+                    Ok(words) => {
+                        let n = words.len();
+                        self.sim.reset();
+                        self.sim.load_flash(&words);
+                        self.sim_last_result = None;
+                        self.set_status(format!(
+                            "Assembled {n} word{} → Flash.",
+                            if n == 1 { "" } else { "s" }
+                        ));
+                    }
+                    Err(errors) => {
+                        let msg = errors
+                            .iter()
+                            .map(|e| e.to_string())
+                            .collect::<Vec<_>>()
+                            .join("   ");
+                        self.set_error(msg);
+                    }
+                }
+            }
+            SimAction::Step => {
+                self.sim_last_result = Some(self.sim.step());
+            }
+            SimAction::Run10 => {
+                let (_, r) = self.sim.step_n(10);
+                self.sim_last_result = Some(r);
+            }
+            SimAction::Run100 => {
+                let (_, r) = self.sim.step_n(100);
+                self.sim_last_result = Some(r);
+            }
+            SimAction::Reset => {
+                self.sim.reset();
+                self.sim_last_result = None;
+                self.auto_running = false;
+                self.ips = 0.0;
+                self.ips_sample_steps = 0;
+                self.ips_sample_start = std::time::Instant::now();
+            }
+            SimAction::AutoToggle => {
+                self.auto_running = !self.auto_running;
+                if self.auto_running {
+                    // reset_ips_window_on_run
+                    self.ips_sample_start = std::time::Instant::now();
+                    self.ips_sample_steps = 0;
+                }
+            }
+        }
+
+        // auto_run_12ms_run_timed
+        if self.auto_running {
+            let (steps, result) = self.sim.run_timed(12);
+            if result != StepResult::Ok {
+                self.sim_last_result = Some(result);
+                self.auto_running = false;
+            }
+
+            // ips_accum_250ms_refresh
+            self.ips_sample_steps += steps;
+            let elapsed_secs = self.ips_sample_start.elapsed().as_secs_f64();
+            if elapsed_secs >= 0.25 {
+                self.ips = self.ips_sample_steps as f64 / elapsed_secs;
+                self.ips_sample_steps = 0;
+                self.ips_sample_start = std::time::Instant::now();
+            }
+
+            ctx.request_repaint(); // auto_run_repaint
+        }
+
+        // isa_overlay_z_last
+        show_isa_window(ctx, &mut self.show_isa);
+
         self.show_modal(ctx);
     }
 }
@@ -692,7 +821,7 @@ fn find_first_supported_file(root: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Creates `parent/name/` and `parent/name/name.lain`.
+/// mkdir_project parent_name_lainfile
 fn try_create_lain_project(parent: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     let name = validate_leaf_name(name)?;
     let root = parent.join(&name);
