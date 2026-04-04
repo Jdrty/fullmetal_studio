@@ -21,7 +21,23 @@ impl std::fmt::Display for AsmError {
     }
 }
 
+/// Assemble source and also return a source-map of (1-indexed line → word address).
+/// Only instruction lines appear in the map; labels, directives, and blanks are omitted.
+/// The map is sorted by line number ascending.
+pub fn assemble_full(
+    source: &str,
+) -> Result<(Vec<u16>, Vec<(usize, u32)>), Vec<AsmError>> {
+    assemble_inner(source, true)
+}
+
 pub fn assemble(source: &str) -> Result<Vec<u16>, Vec<AsmError>> {
+    assemble_inner(source, false).map(|(w, _)| w)
+}
+
+fn assemble_inner(
+    source: &str,
+    build_map: bool,
+) -> Result<(Vec<u16>, Vec<(usize, u32)>), Vec<AsmError>> {
     // pass_0 builtins_then_user_equ sym resolves in_order no_forward_equ
     let mut equates = builtin_equates();
     for raw in source.lines() {
@@ -53,8 +69,9 @@ pub fn assemble(source: &str) -> Result<Vec<u16>, Vec<AsmError>> {
     }
 
     // pass_2 encode_org_nop_pad
-    let mut words:  Vec<u16>     = Vec::new();
-    let mut errors: Vec<AsmError> = Vec::new();
+    let mut words:      Vec<u16>          = Vec::new();
+    let mut source_map: Vec<(usize, u32)> = Vec::new();
+    let mut errors:     Vec<AsmError>     = Vec::new();
     addr = 0;
     for (idx, raw) in source.lines().enumerate() {
         let line_nr = idx + 1;
@@ -78,12 +95,13 @@ pub fn assemble(source: &str) -> Result<Vec<u16>, Vec<AsmError>> {
         }
         if line.starts_with('.') { continue; } // other directives
         if label_name(line).is_some() { continue; }
+        if build_map { source_map.push((line_nr, addr)); }
         match encode(line, addr, &labels, &equates) {
             Ok(encoded) => { addr += encoded.len() as u32; words.extend(encoded); }
             Err(msg)    => errors.push(AsmError { line: line_nr, msg }),
         }
     }
-    if errors.is_empty() { Ok(words) } else { Err(errors) }
+    if errors.is_empty() { Ok((words, source_map)) } else { Err(errors) }
 }
 
 // directive_handling

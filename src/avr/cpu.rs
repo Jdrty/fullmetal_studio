@@ -1012,6 +1012,16 @@ impl Cpu {
 
     // disasm_at
 
+    /// Returns the number of 16-bit words consumed by the instruction with the given opcode.
+    /// The only 2-word instructions in AVR are JMP, CALL, LDS, and STS.
+    pub fn instr_words(op: u16) -> usize {
+        if (op & 0xFE0E) == 0x940C { return 2; } // JMP
+        if (op & 0xFE0E) == 0x940E { return 2; } // CALL
+        if (op & 0xFE0F) == 0x9000 { return 2; } // LDS
+        if (op & 0xFE0F) == 0x9200 { return 2; } // STS
+        1
+    }
+
     pub fn disasm_at(&self, addr: u32) -> String {
         if addr as usize >= FLASH_WORDS { return "---".into(); }
         let op   = self.flash[addr as usize];

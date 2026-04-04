@@ -1,7 +1,7 @@
 //! avr_sim_panel tabs cpu ports timers sram
 
 use eframe::egui::{
-    self, Button, Color32, Frame, Grid, Margin, RichText, ScrollArea, Stroke, Ui,
+    self, Button, Color32, Frame, Grid, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, Ui,
 };
 
 use crate::avr::cpu::{
@@ -16,8 +16,23 @@ const DIM:     Color32 = Color32::from_rgb(65,  65,  65);
 const ERR_RED: Color32 = Color32::from_rgb(255, 80,  80);
 
 // public_types
+const FLASH_PER_PAGE: usize = 128; // words per flash sub-page
+const FLASH_TOTAL_PAGES: usize = FLASH_WORDS / FLASH_PER_PAGE; // 512
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SimTab { Cpu, Ports, Timers, Sram }
+pub enum SimTab { Cpu, Ports, Timers, Sram, Flash }
+
+pub struct FlashState {
+    pub page:      usize,
+    pub jump_text: String,
+    pub jumping:   bool,
+}
+
+impl Default for FlashState {
+    fn default() -> Self {
+        Self { page: 0, jump_text: String::new(), jumping: false }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SimAction {
@@ -39,6 +54,7 @@ pub fn show_sim_panel(
     active_tab:   &mut SimTab,
     auto_running: bool,
     ips:          f64,
+    flash_state:  &mut FlashState,
 ) -> SimAction {
     let mut action = SimAction::None;
 
@@ -80,6 +96,7 @@ pub fn show_sim_panel(
                     (SimTab::Ports,  "PORTS"),
                     (SimTab::Timers, "TIMERS"),
                     (SimTab::Sram,   "SRAM"),
+                    (SimTab::Flash,  "FLASH"),
                 ] {
                     let selected   = *active_tab == tab;
                     let color      = if selected { START_GREEN } else { DIM };
@@ -111,6 +128,7 @@ pub fn show_sim_panel(
                         SimTab::Ports  => show_ports_tab(ui, cpu),
                         SimTab::Timers => show_timers_tab(ui, cpu),
                         SimTab::Sram   => show_sram_tab(ui, cpu),
+                        SimTab::Flash  => show_flash_tab(ui, cpu, flash_state),
                     }
                 });
 
@@ -534,7 +552,169 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu) {
         });
 }
 
-// widget_formatting_helpers
+// ── FLASH tab ─────────────────────────────────────────────────────────────────
+
+fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
+    // ── Header + sub-page nav ─────────────────────────────────────────────────
+    section_label(ui, &format!(
+        "FLASH  0x0000–0xFFFF  ({} words)  page {}/{}",
+        FLASH_WORDS, s.page + 1, FLASH_TOTAL_PAGES,
+    ));
+    ui.add_space(4.0);
+
+    ui.horizontal(|ui| {
+        // → PC: jump to the page that contains the current PC
+        let pc_page = cpu.pc as usize / FLASH_PER_PAGE;
+        if retro_btn(ui, "\u{2192}PC").clicked() {
+            s.page    = pc_page;
+            s.jumping = false;
+        }
+        ui.add_space(6.0);
+
+        // Fixed quick-tabs for pages 1–5
+        for p in 0..5usize {
+            if flash_page_btn(ui, &format!("{}", p + 1), s.page == p).clicked() {
+                s.page    = p;
+                s.jumping = false;
+            }
+        }
+        ui.add_space(4.0);
+
+        // If current page is outside 1–5 and not the last, show its number in amber
+        if s.page >= 5 && s.page < FLASH_TOTAL_PAGES - 1 {
+            ui.label(
+                RichText::new(format!("[{}]", s.page + 1))
+                    .monospace().size(11.0).color(AMBER),
+            );
+            ui.add_space(2.0);
+        }
+
+        // "···" jump button / inline text input
+        if s.jumping {
+            let resp = ui.add(
+                TextEdit::singleline(&mut s.jump_text)
+                    .desired_width(46.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            resp.request_focus();
+            let enter = ui.input(|i| i.key_pressed(Key::Enter));
+            if enter || resp.lost_focus() {
+                if let Ok(p) = s.jump_text.trim().parse::<usize>() {
+                    s.page = p.saturating_sub(1).min(FLASH_TOTAL_PAGES - 1);
+                }
+                s.jumping = false;
+            }
+        } else if retro_btn(ui, "···").clicked() {
+            s.jumping   = true;
+            s.jump_text = format!("{}", s.page + 1);
+        }
+
+        ui.add_space(4.0);
+
+        // Last page always visible
+        let last = FLASH_TOTAL_PAGES - 1;
+        if flash_page_btn(ui, &format!("{}", FLASH_TOTAL_PAGES), s.page == last).clicked() {
+            s.page    = last;
+            s.jumping = false;
+        }
+    });
+
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(2.0);
+
+    // ── Column header ─────────────────────────────────────────────────────────
+    ui.label(
+        RichText::new("   ADDR  WORDS         DISASM")
+            .monospace().size(11.0).color(START_GREEN_DIM),
+    );
+    ui.separator();
+    ui.add_space(2.0);
+
+    // ── Instruction rows ──────────────────────────────────────────────────────
+    let page_start = (s.page * FLASH_PER_PAGE) as u32;
+    let page_end   = (page_start + FLASH_PER_PAGE as u32).min(FLASH_WORDS as u32);
+
+    let mut addr = page_start;
+    let mut zero_run_start: Option<u32> = None;
+
+    while addr < page_end {
+        let op = if (addr as usize) < FLASH_WORDS {
+            unsafe { *cpu.flash.get_unchecked(addr as usize) }
+        } else {
+            0
+        };
+        let nwords  = Cpu::instr_words(op);
+        let op2     = if nwords == 2 && (addr as usize + 1) < FLASH_WORDS {
+            unsafe { *cpu.flash.get_unchecked(addr as usize + 1) }
+        } else {
+            0
+        };
+        let is_pc    = addr == cpu.pc as u32;
+        let all_zero = op == 0 && (nwords == 1 || op2 == 0);
+
+        // Accumulate zero runs (never skip the PC row)
+        if all_zero && !is_pc {
+            if zero_run_start.is_none() { zero_run_start = Some(addr); }
+            addr += nwords as u32;
+            continue;
+        }
+
+        // Emit a skip marker when the zero run ends
+        if let Some(start) = zero_run_start.take() {
+            let count = addr - start;
+            ui.label(
+                RichText::new(format!("   ···  ({count} empty words)"))
+                    .monospace().size(10.5).color(DIM),
+            );
+        }
+
+        // Row
+        let arrow     = if is_pc { "\u{2192}" } else { " " };
+        let words_str = if nwords == 2 {
+            format!("{op:04X} {op2:04X}")
+        } else {
+            format!("{op:04X}     ")
+        };
+        let disasm = cpu.disasm_at(addr);
+        let ivt    = Cpu::ivt_name(addr)
+            .map(|n| format!("  ; <{n}>"))
+            .unwrap_or_default();
+        let (color, size) = if is_pc { (AMBER, 12.5_f32) } else { (START_GREEN, 12.0_f32) };
+
+        ui.label(
+            RichText::new(format!("{arrow}  {addr:04X}  {words_str}  {disasm}{ivt}"))
+                .monospace().size(size).color(color),
+        );
+
+        addr += nwords as u32;
+    }
+
+    // Trailing zero-run marker
+    if let Some(start) = zero_run_start.take() {
+        let count = page_end - start;
+        if count > 0 {
+            ui.label(
+                RichText::new(format!("   ···  ({count} empty words)"))
+                    .monospace().size(10.5).color(DIM),
+            );
+        }
+    }
+}
+
+// ── Widget / formatting helpers ───────────────────────────────────────────────
+
+fn flash_page_btn(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
+    let color  = if selected { AMBER }                          else { START_GREEN_DIM };
+    let fill   = if selected { Color32::from_rgb(30, 20, 0) }  else { Color32::from_rgb(6, 16, 6) };
+    let stroke  = if selected { AMBER }                         else { DIM };
+    ui.add(
+        Button::new(RichText::new(label).monospace().size(11.5).color(color))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, stroke)),
+    )
+}
+
 fn section_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).monospace().size(11.0).color(START_GREEN_DIM));
 }

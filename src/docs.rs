@@ -3,11 +3,262 @@
 use eframe::egui::{
     self, Align, Button, Color32, Frame, Grid, Layout, Margin, RichText, ScrollArea, Stroke, Ui,
 };
+use crate::avr::cpu::{Cpu, FLASH_WORDS};
 use crate::welcome::{START_GREEN, START_GREEN_DIM};
 
 const AMBER:   Color32 = Color32::from_rgb(255, 185, 55);
 const DIM:     Color32 = Color32::from_rgb(65,  65,  65);
 const SEC_COL: Color32 = Color32::from_rgb(100, 220, 100);
+
+// flash_locations_window
+
+/// Overlay showing the IVT layout and code regions currently loaded in flash.
+pub fn show_flash_locations_window(ctx: &egui::Context, open: &mut bool, cpu: &Cpu) {
+    if !*open { return; }
+    let screen = ctx.screen_rect();
+    let w = screen.width()  * 0.88;
+    let h = screen.height() * 0.88;
+
+    egui::Window::new("flash_locations_win")
+        .title_bar(false)
+        .resizable(false)
+        .collapsible(false)
+        .fixed_size([w, h])
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .frame(
+            Frame::NONE
+                .fill(Color32::from_rgb(3, 7, 3))
+                .stroke(Stroke::new(1.5, START_GREEN))
+                .inner_margin(Margin::same(16)),
+        )
+        .show(ctx, |ui| {
+            // title_bar
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("[ FLASH LOCATIONS — ATmega128A ]")
+                        .monospace().size(16.0).color(START_GREEN),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(Button::new(
+                        RichText::new("  X  ").monospace().size(13.0).color(START_GREEN),
+                    ).stroke(Stroke::new(1.0, START_GREEN))).clicked() {
+                        *open = false;
+                    }
+                });
+            });
+            ui.separator();
+            ui.add_space(4.0);
+
+            ScrollArea::vertical()
+                .id_salt("flash_loc_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    show_ivt_section(ui, cpu);
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    show_code_regions_section(ui, cpu);
+                });
+        });
+}
+
+// ivt_layout
+const IVT: &[(u32, &str)] = &[
+    (0x0000, "RESET"),
+    (0x0002, "INT0"),
+    (0x0004, "INT1"),
+    (0x0006, "INT2"),
+    (0x0008, "INT3"),
+    (0x000A, "INT4"),
+    (0x000C, "INT5"),
+    (0x000E, "INT6"),
+    (0x0010, "INT7"),
+    (0x0012, "TIMER2_COMP"),
+    (0x0014, "TIMER2_OVF"),
+    (0x0016, "TIMER1_CAPT"),
+    (0x0018, "TIMER1_COMPA"),
+    (0x001A, "TIMER1_COMPB"),
+    (0x001C, "TIMER1_OVF"),
+    (0x001E, "TIMER0_COMP"),
+    (0x0020, "TIMER0_OVF"),
+    (0x0022, "SPI_STC"),
+    (0x0024, "USART0_RX"),
+    (0x0026, "USART0_UDRE"),
+    (0x0028, "USART0_TX"),
+    (0x002A, "ADC"),
+    (0x002C, "EE_RDY"),
+    (0x002E, "ANA_COMP"),
+    (0x0030, "TIMER1_COMPC"),
+    (0x0032, "TIMER3_CAPT"),
+    (0x0034, "TIMER3_COMPA"),
+    (0x0036, "TIMER3_COMPB"),
+    (0x0038, "TIMER3_COMPC"),
+    (0x003A, "TIMER3_OVF"),
+    (0x003C, "USART1_RX"),
+    (0x003E, "USART1_UDRE"),
+    (0x0040, "USART1_TX"),
+    (0x0042, "TWI"),
+    (0x0044, "SPM_RDY"),
+];
+
+fn vector_content(cpu: &Cpu, addr: u32) -> (String, bool) {
+    let op = if (addr as usize) < FLASH_WORDS { cpu.flash[addr as usize] } else { 0 };
+    if op == 0x0000 {
+        return ("EMPTY".to_string(), false);
+    }
+    // JMP: 1001 010k kkkk 110k  (any k)
+    if (op & 0xFE0E) == 0x940C {
+        let next = if (addr as usize + 1) < FLASH_WORDS { cpu.flash[addr as usize + 1] } else { 0 };
+        let target = (((op & 0x01F0) as u32) << 17)
+                   | (((op & 0x0001) as u32) << 16)
+                   | (next as u32);
+        return (format!("JMP  → 0x{target:04X}"), true);
+    }
+    // RJMP: 1100 kkkk kkkk kkkk
+    if (op & 0xF000) == 0xC000 {
+        let raw = op & 0x0FFF;
+        let k   = (((raw << 4) as i16) >> 4) as i32; // sign-extend 12-bit
+        let target = (addr as i32 + 1 + k) as u32;
+        let sign = if k >= 0 { "+" } else { "" };
+        return (format!("RJMP → 0x{target:04X}  ({sign}{k})"), true);
+    }
+    // Other instruction present — show disasm
+    (format!("{}  [non-jump]", cpu.disasm_at(addr)), true)
+}
+
+fn show_ivt_section(ui: &mut Ui, cpu: &Cpu) {
+    ui.label(
+        RichText::new("INTERRUPT VECTOR TABLE  (0x0000 – 0x0044, 2 words each)")
+            .monospace().size(12.5).color(SEC_COL),
+    );
+    ui.add_space(4.0);
+
+    // column_header
+    ui.label(
+        RichText::new("  ADDR   VECTOR           CONTENT")
+            .monospace().size(11.0).color(DIM),
+    );
+    ui.separator();
+    ui.add_space(2.0);
+
+    Grid::new("ivt_grid")
+        .num_columns(3)
+        .spacing([10.0, 2.0])
+        .show(ui, |ui| {
+            for &(addr, name) in IVT {
+                let (content, occupied) = vector_content(cpu, addr);
+                let name_col = if occupied { AMBER } else { DIM };
+                let cont_col = if occupied { START_GREEN } else { DIM };
+
+                ui.label(
+                    RichText::new(format!("  0x{addr:04X}"))
+                        .monospace().size(11.5).color(START_GREEN_DIM),
+                );
+                ui.label(
+                    RichText::new(format!("{name:<16}"))
+                        .monospace().size(11.5).color(name_col),
+                );
+                ui.label(
+                    RichText::new(content).monospace().size(11.5).color(cont_col),
+                );
+                ui.end_row();
+            }
+        });
+
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("  Code area begins at 0x0046 (first word after IVT)")
+            .monospace().size(11.0).color(DIM),
+    );
+}
+
+fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu) {
+    ui.label(
+        RichText::new("CODE REGIONS  (non-empty flash words beyond 0x0045)")
+            .monospace().size(12.5).color(SEC_COL),
+    );
+    ui.add_space(4.0);
+
+    // Walk flash from 0x0046 and collect contiguous occupied regions
+    let start_scan = 0x0046_usize;
+    let mut regions: Vec<(u32, u32, u32)> = Vec::new(); // (start, end_excl, words)
+    let mut in_region = false;
+    let mut reg_start = 0u32;
+    let mut reg_words = 0u32;
+
+    let mut a = start_scan;
+    while a < FLASH_WORDS {
+        let op = cpu.flash[a];
+        if op != 0 {
+            if !in_region { reg_start = a as u32; reg_words = 0; in_region = true; }
+            let nw = crate::avr::cpu::Cpu::instr_words(op);
+            reg_words += nw as u32;
+            a += nw;
+        } else {
+            if in_region {
+                regions.push((reg_start, (reg_start + reg_words), reg_words));
+                in_region = false;
+            }
+            a += 1;
+        }
+    }
+    if in_region {
+        regions.push((reg_start, reg_start + reg_words, reg_words));
+    }
+
+    if regions.is_empty() {
+        ui.label(
+            RichText::new("  (flash is empty — assemble a program first)")
+                .monospace().size(11.5).color(DIM),
+        );
+        return;
+    }
+
+    let total_words: u32 = regions.iter().map(|r| r.2).sum();
+    ui.label(
+        RichText::new(format!(
+            "  {} region{},  {} words total  ({} bytes)",
+            regions.len(),
+            if regions.len() == 1 { "" } else { "s" },
+            total_words,
+            total_words * 2,
+        )).monospace().size(11.5).color(START_GREEN_DIM),
+    );
+    ui.add_space(4.0);
+
+    ui.label(
+        RichText::new("  START    END      WORDS    DISASM (first instr)")
+            .monospace().size(11.0).color(DIM),
+    );
+    ui.separator();
+    ui.add_space(2.0);
+
+    Grid::new("code_regions_grid")
+        .num_columns(4)
+        .spacing([10.0, 2.0])
+        .show(ui, |ui| {
+            for (start, end, words) in &regions {
+                let first_disasm = cpu.disasm_at(*start);
+                ui.label(
+                    RichText::new(format!("  0x{start:04X}"))
+                        .monospace().size(11.5).color(AMBER),
+                );
+                ui.label(
+                    RichText::new(format!("0x{:04X}", end - 1))
+                        .monospace().size(11.5).color(START_GREEN_DIM),
+                );
+                ui.label(
+                    RichText::new(format!("{words:>6} words"))
+                        .monospace().size(11.5).color(START_GREEN),
+                );
+                ui.label(
+                    RichText::new(first_disasm)
+                        .monospace().size(11.5).color(DIM),
+                );
+                ui.end_row();
+            }
+        });
+}
 
 // data_types
 

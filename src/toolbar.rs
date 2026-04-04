@@ -21,6 +21,8 @@ pub enum ToolbarAction {
     AddFileToProject,
     SimTogglePanel,
     DocsInstructionSet,
+    DocsFlashLocations,
+    HelpersWordHelper,
 }
 
 fn title_font(size: f32) -> FontId {
@@ -46,11 +48,12 @@ fn apply_dropdown_style(ui: &mut Ui) {
 }
 
 pub fn show_toolbar(
-    ui: &mut Ui,
-    active_file: Option<&Path>,
-    workspace_root: &Path,
-    is_dirty: bool,
-    sim_visible: bool,
+    ui:                  &mut Ui,
+    active_file:         Option<&Path>,
+    workspace_root:      &Path,
+    is_dirty:            bool,
+    sim_visible:         bool,
+    word_helper_visible: bool,
 ) -> ToolbarAction {
     let mut action = ToolbarAction::None;
 
@@ -120,6 +123,24 @@ pub fn show_toolbar(
                         apply_dropdown_style(ui);
                         if ui.button("Instruction set").clicked() {
                             action = ToolbarAction::DocsInstructionSet;
+                            ui.close_menu();
+                        }
+                        if ui.button("Flash locations").clicked() {
+                            action = ToolbarAction::DocsFlashLocations;
+                            ui.close_menu();
+                        }
+                    },
+                );
+
+                let helpers_label = if word_helper_visible { "HELPERS ▪" } else { "HELPERS" };
+                ui.menu_button(
+                    RichText::new(helpers_label)
+                        .font(title_font(18.0))
+                        .color(START_GREEN),
+                    |ui| {
+                        apply_dropdown_style(ui);
+                        if ui.button("Word helper").clicked() {
+                            action = ToolbarAction::HelpersWordHelper;
                             ui.close_menu();
                         }
                     },

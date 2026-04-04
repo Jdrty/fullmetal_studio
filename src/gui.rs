@@ -13,9 +13,10 @@ use crate::avr::assembler::assemble;
 use crate::avr::cpu::StepResult;
 use crate::avr::Cpu;
 use crate::editor::TextEditor;
-use crate::docs::show_isa_window;
-use crate::sim_panel::{show_sim_panel, SimAction, SimTab};
+use crate::docs::{show_flash_locations_window, show_isa_window};
+use crate::sim_panel::{show_sim_panel, FlashState, SimAction, SimTab};
 use crate::toolbar::{show_toolbar, ToolbarAction};
+use crate::word_helper::{show_word_helper, WordHelperState};
 use crate::welcome::{
     show_create_project, show_welcome, CreateProjectAction, WelcomeAction, START_GREEN_DIM,
 };
@@ -164,6 +165,10 @@ pub struct LainApp {
     sim_tab: SimTab,
     sim_last_result: Option<StepResult>,
     show_isa: bool,
+    flash_state: FlashState,
+    show_flash_locations: bool,
+    show_word_helper: bool,
+    word_helper_state: WordHelperState,
     // auto_run_state
     auto_running: bool,
     ips: f64,
@@ -184,11 +189,36 @@ impl LainApp {
             sim_tab: SimTab::Cpu,
             sim_last_result: None,
             show_isa: false,
+            flash_state: FlashState::default(),
+            show_flash_locations: false,
+            show_word_helper: false,
+            word_helper_state: WordHelperState::default(),
             auto_running: false,
             ips: 0.0,
             ips_sample_start: std::time::Instant::now(),
             ips_sample_steps: 0,
         }
+    }
+
+    /// Return (filename, content) pairs for all .lain files in the workspace root.
+    fn collect_lain_files(&self) -> Vec<(String, String)> {
+        let Some(ws) = self.current_workspace() else { return vec![]; };
+        let Ok(entries) = std::fs::read_dir(&ws.root) else { return vec![]; };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("lain") {
+                let name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string();
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    out.push((name, content));
+                }
+            }
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     fn current_workspace(&self) -> Option<&Workspace> {
@@ -396,9 +426,17 @@ impl LainApp {
             },
             ToolbarAction::SimTogglePanel => {
                 self.show_sim = !self.show_sim;
+                if self.show_sim { self.show_word_helper = false; }
             }
             ToolbarAction::DocsInstructionSet => {
                 self.show_isa = true;
+            }
+            ToolbarAction::DocsFlashLocations => {
+                self.show_flash_locations = true;
+            }
+            ToolbarAction::HelpersWordHelper => {
+                self.show_word_helper = !self.show_word_helper;
+                if self.show_word_helper { self.show_sim = false; }
             }
         }
     }
@@ -578,19 +616,23 @@ impl eframe::App for LainApp {
                         &workspace.root,
                         self.editor.is_dirty(),
                         self.show_sim,
+                        self.show_word_helper,
                     );
                 });
         }
 
-        // sim_panel_editor_only
+        // rhs_panel_editor_only: sim or word_helper, mutually exclusive
         let mut sim_action = SimAction::None;
-        if self.show_sim {
-            if matches!(self.phase, AppPhase::Editor { .. }) {
-                egui::SidePanel::right("sim_panel_container")
-                    .exact_width(340.0)
-                    .resizable(false)
-                    .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| {
+        let rhs_open = (self.show_sim || self.show_word_helper)
+            && matches!(self.phase, AppPhase::Editor { .. });
+
+        if rhs_open {
+            egui::SidePanel::right("rhs_panel")
+                .exact_width(340.0)
+                .resizable(false)
+                .frame(egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    if self.show_sim {
                         sim_action = show_sim_panel(
                             ui,
                             &self.sim,
@@ -598,9 +640,14 @@ impl eframe::App for LainApp {
                             &mut self.sim_tab,
                             self.auto_running,
                             self.ips,
+                            &mut self.flash_state,
                         );
-                    });
-            }
+                    } else if self.show_word_helper {
+                        // collect .lain files from workspace for the helper dropdowns
+                        let files = self.collect_lain_files();
+                        show_word_helper(ui, &mut self.word_helper_state, &files);
+                    }
+                });
         }
 
         egui::CentralPanel::default()
@@ -764,8 +811,9 @@ impl eframe::App for LainApp {
             ctx.request_repaint(); // auto_run_repaint
         }
 
-        // isa_overlay_z_last
+        // doc_overlays_z_last
         show_isa_window(ctx, &mut self.show_isa);
+        show_flash_locations_window(ctx, &mut self.show_flash_locations, &self.sim);
 
         self.show_modal(ctx);
     }
