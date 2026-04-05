@@ -6,10 +6,12 @@ use eframe::egui::{
     Color32, FontId,
 };
 
+use crate::welcome::{START_GREEN, START_GREEN_DIM};
+
 // palette
 
-const MNEMONIC: Color32 = Color32::from_rgb(160, 240, 160); // START_GREEN
-const COMMENT:  Color32 = Color32::from_rgb(100, 180, 100); // START_GREEN_DIM
+const MNEMONIC: Color32 = START_GREEN;
+const COMMENT: Color32 = START_GREEN_DIM;
 const REGISTER: Color32 = Color32::WHITE;
 const NUMBER:   Color32 = Color32::from_rgb(255, 185, 55);  // AMBER
 const LABEL:    Color32 = Color32::from_rgb(120, 210, 255); // CYAN

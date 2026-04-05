@@ -144,7 +144,7 @@ impl Cpu {
 
     // eeprom_peripheral
 
-    /// Handle a write to the EECR register, emulating the ATmega128A EEPROM controller.
+    /// handle a write to the EECR register, emulating the ATmega128A EEPROM controller.
     fn eecr_write(&mut self, val: u8) {
         let idx = (io_map::EECR - 0x0020) as usize;
         let old = self.io[idx];
@@ -170,7 +170,7 @@ impl Cpu {
                     self.eeprom[addr] = data;
                 }
             }
-            // Hardware clears EEWE and EEMWE after write completes
+            // hardware clears EEWE and EEMWE after write completes
             self.io[idx] = val & !0x06;
             self.eemwe_timer = 0;
             return;
@@ -184,7 +184,7 @@ impl Cpu {
         self.io[idx] = val & !0x01; // EERE never persists
     }
 
-    /// Read EEAR (EEARH:EEARL) as a usize EEPROM address.
+    /// read EEAR (EEARH:EEARL) as a usize EEPROM address.
     #[inline(always)]
     fn eear_addr(&self) -> usize {
         let lo = self.io[(io_map::EEARL - 0x0020) as usize] as usize;
@@ -1229,11 +1229,10 @@ impl Cpu {
     }
 
     // disasm_at
-
-    /// Returns the number of 16-bit words consumed by the instruction with the given opcode.
-    /// The only 2-word instructions in AVR are JMP, CALL, LDS, and STS.
-    /// Returns (min_cycles, max_cycles) for the given 16-bit opcode.
-    /// Variable-cycle instructions (branches, skips) return different min and max.
+    /// returns the number of 16-bit words consumed by the instruction with the given opcode
+    /// the only 2-word instructions in AVR are JMP, CALL, LDS, and STS
+    /// returns (min_cycles, max_cycles) for the given 16-bit opcode
+    /// variable-cycle instructions (branches, skips) return different min and max
     pub fn instr_cycles(op: u16) -> (u8, u8) {
         let hi8 = (op >> 8) as u8;
         match op >> 12 {
@@ -1279,7 +1278,7 @@ impl Cpu {
                 // 0x94xx / 0x95xx: single-reg ops (COM, NEG, SWAP, INC, DEC, ASR, LSR,
                 //                  ROR, BSET/BCLR, SLEEP, WDR, BREAK, SPM)
                 if hi8 == 0x94 || hi8 == 0x95 { return (1, 1); }
-                // Everything else: LD/ST/POP/PUSH with various addressing modes
+                // everything else: LD/ST/POP/PUSH with various addressing modes
                 (2, 2)
             }
             0xB => (1, 1),  // IN / OUT
@@ -1308,7 +1307,7 @@ impl Cpu {
         }
     }
 
-    /// Directly set bits in an IO register by data-space address (bypasses write-to-clear).
+    /// directly set bits in an IO register by data-space address (bypasses write-to-clear).
     pub fn set_io_bit(&mut self, data_addr: u16, mask: u8) {
         let idx = (data_addr as usize).wrapping_sub(0x0020);
         if idx < self.io.len() {

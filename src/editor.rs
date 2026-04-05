@@ -20,9 +20,9 @@ pub struct SearchBar {
     pub matches:      Vec<usize>,
     pub current:      usize,
     needs_focus:      bool,
-    /// If Some(y), scroll area jumps to this offset once.
+    /// if idk(y), scroll area jumps to this offset once
     pub next_scroll:  Option<f32>,
-    /// Set after navigate(); cleared after cursor is pushed once.
+    /// set after navigate(); cleared after cursor is pushed once
     pending_cursor:   bool,
     id: Id,
 }
@@ -56,7 +56,7 @@ impl SearchBar {
         self.pending_cursor = false;
     }
 
-    /// Rebuild match list from source (case-insensitive).
+    /// rebuild match list from source (its not case sensitive)
     pub fn rebuild(&mut self, source: &str) {
         if self.query == self.prev_query { return; }
         self.prev_query = self.query.clone();
@@ -78,7 +78,7 @@ impl SearchBar {
         }
     }
 
-    /// Navigate ±1, wrapping, then schedule a scroll and cursor push.
+    /// navigate ±1, wrapping, then schedule a scroll and cursor push
     pub fn navigate(&mut self, delta: i32, source: &str, row_h: f32) {
         if self.matches.is_empty() { return; }
         let n = self.matches.len();
@@ -101,7 +101,7 @@ fn char_to_byte(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
 }
 
-/// Split LayoutJob sections at [byte_start, byte_end) and colour only that slice.
+/// split LayoutJob sections at [byte_start, byte_end) and colour only that slice
 fn apply_highlight(
     job:        &mut egui::text::LayoutJob,
     byte_start: usize,
@@ -183,7 +183,7 @@ impl TextEditor {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
-        // -- keyboard shortcuts ------------------------------------------------
+        // shortcuts hooray
         let cmd_f = ui.input_mut(|i| {
             i.consume_shortcut(&egui::KeyboardShortcut::new(
                 if cfg!(target_os = "macos") { Modifiers::MAC_CMD } else { Modifiers::CTRL },
@@ -192,8 +192,8 @@ impl TextEditor {
         });
         if cmd_f { self.search.open(); }
 
-        // Escape only closes search when the search input actually has keyboard focus,
-        // so normal editor typing / other shortcuts are never swallowed.
+        // escape only closes search when the search input actually has keyboard focus,
+        // so normal editor typing / other shortcuts are never broken
         if self.search.visible {
             let search_focused = ui.ctx().memory(|m| m.has_focus(self.search.id));
             if search_focused {
@@ -219,14 +219,14 @@ impl TextEditor {
 
         let current_line = self.cursor_line.min(n.saturating_sub(1));
 
-        // -- rebuild matches ---------------------------------------------------
+        // rebuild
         if self.search.visible {
             let snap = self.source.clone();
             self.search.rebuild(&snap);
         }
 
-        // -- push TextEdit cursor only when the user explicitly navigated ------
-        // (not every frame — that would override normal editor cursor movement)
+        // push TextEdit cursor only when the user explicitly navigated
+        // (not every frame bc that would override normal editor cursor movement)
         if self.search.pending_cursor && !self.search.matches.is_empty() {
             let ci   = self.search.matches[self.search.current];
             let qlen = self.search.query.chars().count();
@@ -241,12 +241,12 @@ impl TextEditor {
             self.search.pending_cursor = false;
         }
 
-        // -- build layouter with exact match highlights -----------------------
+        // build layouter with exact match highlights
         // IMPORTANT: highlights are re-derived from `text` (the ground-truth
-        // string passed to the layouter each call) rather than a pre-computed
-        // snapshot. This avoids the "shift on insert/delete" bug where the
-        // snapshot char-offsets become stale once the TextEdit mutates the
-        // buffer during the same frame.
+        // string passed to the layouter each call) rather than pre-computed snapshot
+        // my reasoning for this is to avoid the "shift on insert/delete" thing where the
+        // snapshot char-offsets breaks once the TextEdit mutates the
+        // buffer during the same frame
         let search_vis     = self.search.visible;
         let search_query   = if search_vis { self.search.query.clone() } else { String::new() };
         let search_current = self.search.current;
@@ -281,7 +281,7 @@ impl TextEditor {
             ui.fonts(|f| f.layout_job(job))
         };
 
-        // -- scroll area -------------------------------------------------------
+        // scrol area
         let scroll_offset = self.search.next_scroll.take();
         let mut sa = ScrollArea::vertical()
             .id_salt("editor_scroll")
@@ -342,7 +342,7 @@ impl TextEditor {
             ui.ctx().memory_mut(|mem| mem.request_focus(self.id));
         }
 
-        // -- floating search widget (top-right corner, over editor) -----------
+        // widget (looks like shit to be imprioved)
         if self.search.visible {
             // Dynamic input width: grows with query length, minimum 4 chars wide.
             let char_w   = ui.fonts(|f| f.glyph_width(&font_id, '0'));
@@ -350,15 +350,14 @@ impl TextEditor {
                                .max(50.0)
                                .min(360.0);
 
-            // Area auto-sizes to its content; we position its top-right corner.
-            // We'll estimate widget width to anchor it correctly and update each frame.
+            // area auto-sizes to its content; we position its top-right corner
             let margin_x  = 8.0_f32;
             let margin_y  = 8.0_f32;
 
             let snap_src  = self.source.clone();
             let row_h_cap = row_h;
 
-            // Use pivot = (1, 0) so the right edge stays pinned to editor_rect.right().
+            // use pivot = (1, 0) so the right edge stays pinned to editor_rect.right().
             egui::Area::new(self.id.with("search_area"))
                 .anchor(
                     egui::Align2::RIGHT_TOP,

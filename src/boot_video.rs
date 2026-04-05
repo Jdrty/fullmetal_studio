@@ -1,4 +1,6 @@
-//! Full-window boot sequence: first 114 frames of `assets/videos/fake.mov` via ffmpeg raw RGBA.
+//! full-window boot sequence: first 114 frames of `assets/videos/fake.mov` via ffmpeg raw RGBA
+//! this is COMPLETELY usless lol 
+// but i like a boot animation and its my app so flip you
 
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
@@ -7,11 +9,11 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, ColorImage, CornerRadius, TextureHandle, TextureOptions};
 
-/// H.264 stream size from `ffprobe` (must match ffmpeg output when not scaling).
+/// H.264 stream size from `ffprobe`
 const WIDTH: usize = 1920;
 const HEIGHT: usize = 1080;
 const FRAME_COUNT: u32 = 114;
-/// 30 fps (integer nanoseconds; ~3.3 ns drift per frame vs exact 1/30 s).
+/// 30 fps
 const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 30);
 
 enum Phase {
@@ -27,11 +29,9 @@ enum Phase {
 
 pub struct BootVideo {
     phase: Phase,
-    /// Frames advanced (video pixels or black), 0..=114.
     shown: u32,
     texture: Option<TextureHandle>,
     buf: Vec<u8>,
-    /// Earliest wall time we advance to the next decoded frame (30 fps cadence).
     next_frame_deadline: Instant,
 }
 
@@ -133,7 +133,7 @@ impl BootVideo {
         }
     }
 
-    /// One egui frame of the boot sequence: advance by one logical frame at 30 fps, then repaint until done.
+    /// one egui frame of the boot sequence: advance by one logical frame at 30 fps, then repaint until done
     pub fn show(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         if matches!(self.phase, Phase::Done) {
             return;

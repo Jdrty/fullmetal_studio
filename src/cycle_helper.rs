@@ -12,7 +12,6 @@ const DIM:     Color32 = Color32::from_rgb(65,  65,  65);
 const ERR_RED: Color32 = Color32::from_rgb(255, 80,  80);
 
 // state
-
 pub struct CycleHelperState {
     pub file_idx:    usize,
     pub line_a_text: String,
@@ -30,9 +29,8 @@ impl Default for CycleHelperState {
 }
 
 // helpers
-
-/// Sum (min, max) cycles for all instructions in flash[addr_a..addr_b].
-/// Handles 2-word instructions by advancing by 2.
+/// sum (min, max) cycles for all instructions in flash[addr_a..addr_b]
+/// handles 2-word instructions by advancing by 2
 fn cycles_in_range(flash: &[u16], addr_a: u32, addr_b: u32) -> (u64, u64) {
     let (start, end) = if addr_a <= addr_b {
         (addr_a as usize, addr_b as usize)
@@ -52,7 +50,7 @@ fn cycles_in_range(flash: &[u16], addr_a: u32, addr_b: u32) -> (u64, u64) {
     (min_total, max_total)
 }
 
-/// Count total instructions in range (for display).
+/// count total instructions in range (for display)
 fn instr_count(flash: &[u16], addr_a: u32, addr_b: u32) -> usize {
     let (start, end) = if addr_a <= addr_b {
         (addr_a as usize, addr_b as usize)
@@ -69,7 +67,6 @@ fn instr_count(flash: &[u16], addr_a: u32, addr_b: u32) -> usize {
 }
 
 // rhs panel
-
 /// `files`: list of (display_name, source_content) pairs from the workspace.
 pub fn show_cycle_helper(
     ui:    &mut Ui,

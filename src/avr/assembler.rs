@@ -1011,7 +1011,7 @@ fn imm_u8_sym(s: &str, equates: &HashMap<String, u32>) -> Result<u8, String> {
     Ok(v as u8)
 }
 
-// -- expression evaluator: handles (1 << N) | ... style operands --
+// expression evaluator: handles (1 << N) | ... operands
 
 #[derive(Clone, Debug)]
 enum ExprTok {
@@ -1186,7 +1186,7 @@ fn expr_atom(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<
     }
 }
 
-/// Evaluate a symbol/expression string: literals, identifiers, operators, function calls.
+/// evaluate a symbol/expression string: literals, identifiers, operators, function calls.
 fn sym(s: &str, equates: &HashMap<String, u32>) -> Result<u32, String> {
     let s = s.trim();
     let toks = tokenize_expr(s)

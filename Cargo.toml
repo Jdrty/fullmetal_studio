@@ -9,7 +9,7 @@ rust-version = "1.76"
 eframe = { version = "0.31", default-features = true }
 egui = "0.31"
 egui_extras = { version = "0.31", default-features = true, features = ["image"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rfd = "0.15"
 
 [profile.release]

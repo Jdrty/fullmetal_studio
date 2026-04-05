@@ -23,8 +23,10 @@ use crate::sim_panel::{
 use crate::toolbar::{show_toolbar, ToolbarAction};
 use crate::word_helper::{show_word_helper, WordHelperState};
 use crate::welcome::{
-    show_create_project, show_welcome, CreateProjectAction, WelcomeAction, START_GREEN_DIM,
+    show_create_project, show_welcome, CreateProjectAction, WelcomeAction, START_GREEN,
+    START_GREEN_DIM,
 };
+use crate::welcome_font;
 
 pub fn setup_style(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -47,6 +49,7 @@ pub fn setup_style(ctx: &egui::Context) {
         FontFamily::Name("lain_title".into()),
         vec!["orbitron_title".to_owned()],
     );
+    welcome_font::setup(&mut fonts);
     ctx.set_fonts(fonts);
 
     let mut visuals = Visuals::dark();
@@ -67,16 +70,19 @@ pub fn setup_style(ctx: &egui::Context) {
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_black_alpha(0));
     visuals.widgets.inactive.corner_radius = CornerRadius::ZERO;
 
-    visuals.widgets.hovered.bg_fill = Color32::from_rgba_premultiplied(160, 240, 160, 20);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(100, 180, 100));
+    visuals.widgets.hovered.bg_fill =
+        Color32::from_rgba_unmultiplied(START_GREEN.r(), START_GREEN.g(), START_GREEN.b(), 20);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, START_GREEN_DIM);
     visuals.widgets.hovered.corner_radius = CornerRadius::ZERO;
 
-    visuals.widgets.active.bg_fill = Color32::from_rgba_premultiplied(160, 240, 160, 44);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(160, 240, 160));
+    visuals.widgets.active.bg_fill =
+        Color32::from_rgba_unmultiplied(START_GREEN.r(), START_GREEN.g(), START_GREEN.b(), 44);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, START_GREEN);
     visuals.widgets.active.corner_radius = CornerRadius::ZERO;
 
-    visuals.widgets.open.bg_fill = Color32::from_rgba_premultiplied(160, 240, 160, 32);
-    visuals.widgets.open.bg_stroke = Stroke::new(1.0, Color32::from_rgb(160, 240, 160));
+    visuals.widgets.open.bg_fill =
+        Color32::from_rgba_unmultiplied(START_GREEN.r(), START_GREEN.g(), START_GREEN.b(), 32);
+    visuals.widgets.open.bg_stroke = Stroke::new(1.0, START_GREEN);
     visuals.widgets.open.corner_radius = CornerRadius::ZERO;
 
     visuals.text_cursor.stroke = Stroke::new(2.0, Color32::WHITE);

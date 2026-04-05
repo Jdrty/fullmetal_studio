@@ -10,6 +10,7 @@ mod sim_panel;
 mod syntax;
 mod toolbar;
 mod welcome;
+mod welcome_font;
 mod word_helper;
 
 fn main() -> eframe::Result {
