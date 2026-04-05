@@ -1,7 +1,8 @@
 //! avr_sim_panel tabs cpu ports timers sram
 
 use eframe::egui::{
-    self, Button, Color32, Frame, Grid, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, Ui,
+    self, Button, Color32, Frame, Grid, Key, Margin, RichText, ScrollArea, Stroke,
+    TextEdit, Ui,
 };
 
 use crate::avr::cpu::{
@@ -16,11 +17,98 @@ const DIM:     Color32 = Color32::from_rgb(65,  65,  65);
 const ERR_RED: Color32 = Color32::from_rgb(255, 80,  80);
 
 // public_types
-const FLASH_PER_PAGE: usize = 128; // words per flash sub-page
+const FLASH_PER_PAGE: usize = 128;
 const FLASH_TOTAL_PAGES: usize = FLASH_WORDS / FLASH_PER_PAGE; // 512
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SimTab { Cpu, Ports, Timers, Sram, Flash }
+pub enum SimTab { Cpu, Ports, Timers, Sram, Flash, Break }
+
+// ── IPS speed-limit state ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpsUnit { Ips, Kips, Mips }
+
+impl IpsUnit {
+    pub fn label(self) -> &'static str {
+        match self { Self::Ips => "IPS", Self::Kips => "kIPS", Self::Mips => "MIPS" }
+    }
+    pub fn multiplier(self) -> f64 {
+        match self { Self::Ips => 1.0, Self::Kips => 1_000.0, Self::Mips => 1_000_000.0 }
+    }
+}
+
+pub struct SpeedLimitState {
+    pub enabled:    bool,
+    pub value_text: String,   // raw input text
+    pub unit:       IpsUnit,
+}
+
+impl Default for SpeedLimitState {
+    fn default() -> Self {
+        Self { enabled: false, value_text: "1".to_string(), unit: IpsUnit::Mips }
+    }
+}
+
+impl SpeedLimitState {
+    /// Resolved limit in IPS, or None if disabled / invalid.
+    pub fn limit_ips(&self) -> Option<f64> {
+        if !self.enabled { return None; }
+        self.value_text.trim().parse::<f64>().ok()
+            .filter(|&v| v > 0.0)
+            .map(|v| v * self.unit.multiplier())
+    }
+}
+
+// ── Breakpoint state ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BpAction { Pause, PrintTerm, PrintAndPause }
+
+impl BpAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pause        => "Pause",
+            Self::PrintTerm    => "Print → terminal",
+            Self::PrintAndPause => "Print + Pause",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Breakpoint {
+    pub addr:    u16,
+    pub action:  BpAction,
+    pub message: String,
+    pub enabled: bool,
+}
+
+pub struct BreakpointState {
+    pub breakpoints:  Vec<Breakpoint>,
+    pub new_addr_text: String,
+    pub new_action:   BpAction,
+    pub new_message:  String,
+}
+
+impl Default for BreakpointState {
+    fn default() -> Self {
+        Self {
+            breakpoints:   Vec::new(),
+            new_addr_text: String::new(),
+            new_action:    BpAction::Pause,
+            new_message:   String::new(),
+        }
+    }
+}
+
+impl BreakpointState {
+    /// Flat list of enabled breakpoint addresses (used by CPU hot loop).
+    pub fn active_addrs(&self) -> Vec<u16> {
+        self.breakpoints.iter()
+            .filter(|b| b.enabled)
+            .map(|b| b.addr)
+            .collect()
+    }
+}
 
 pub struct FlashState {
     pub page:      usize,
@@ -48,13 +136,15 @@ pub enum SimAction {
 // entry_point
 
 pub fn show_sim_panel(
-    ui:           &mut Ui,
-    cpu:          &Cpu,
-    last_result:  Option<StepResult>,
-    active_tab:   &mut SimTab,
-    auto_running: bool,
-    ips:          f64,
-    flash_state:  &mut FlashState,
+    ui:            &mut Ui,
+    cpu:           &Cpu,
+    last_result:   Option<StepResult>,
+    active_tab:    &mut SimTab,
+    auto_running:  bool,
+    ips:           f64,
+    flash_state:   &mut FlashState,
+    speed_limit:   &mut SpeedLimitState,
+    bp_state:      &mut BreakpointState,
 ) -> SimAction {
     let mut action = SimAction::None;
 
@@ -97,6 +187,7 @@ pub fn show_sim_panel(
                     (SimTab::Timers, "TIMERS"),
                     (SimTab::Sram,   "SRAM"),
                     (SimTab::Flash,  "FLASH"),
+                    (SimTab::Break,  "BREAK"),
                 ] {
                     let selected   = *active_tab == tab;
                     let color      = if selected { START_GREEN } else { DIM };
@@ -117,7 +208,7 @@ pub fn show_sim_panel(
             ui.add_space(4.0);
 
             // scrollable_tab_content
-            let avail_h = ui.available_height() - 88.0; // room_for_controls
+            let avail_h = ui.available_height() - 142.0; // room_for_controls
             ScrollArea::vertical()
                 .id_salt("sim_scroll")
                 .auto_shrink([false, false])
@@ -129,6 +220,7 @@ pub fn show_sim_panel(
                         SimTab::Timers => show_timers_tab(ui, cpu),
                         SimTab::Sram   => show_sram_tab(ui, cpu),
                         SimTab::Flash  => show_flash_tab(ui, cpu, flash_state),
+                        SimTab::Break  => show_break_tab(ui, bp_state),
                     }
                 });
 
@@ -148,6 +240,7 @@ pub fn show_sim_panel(
                 if retro_btn(ui, "RESET").clicked()       { action = SimAction::Reset; }
             });
             ui.add_space(4.0);
+            // AUTO + IPS display
             ui.horizontal(|ui| {
                 if auto_running {
                     if ui.add(
@@ -175,6 +268,40 @@ pub fn show_sim_panel(
                         .size(12.0)
                         .color(if auto_running { AMBER } else { DIM }),
                 );
+            });
+            // speed-limit row
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut speed_limit.enabled,
+                    RichText::new("Limit:").monospace().size(11.0).color(START_GREEN_DIM),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut speed_limit.value_text)
+                        .desired_width(44.0)
+                        .font(egui::TextStyle::Monospace),
+                );
+                egui::ComboBox::from_id_salt("ips_unit")
+                    .width(58.0)
+                    .selected_text(
+                        RichText::new(speed_limit.unit.label())
+                            .monospace().size(11.0).color(START_GREEN),
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.style_mut().visuals.override_text_color = Some(START_GREEN);
+                        for u in [IpsUnit::Ips, IpsUnit::Kips, IpsUnit::Mips] {
+                            ui.selectable_value(
+                                &mut speed_limit.unit, u,
+                                RichText::new(u.label()).monospace().size(11.0),
+                            );
+                        }
+                    });
+                if let Some(lim) = speed_limit.limit_ips() {
+                    ui.label(
+                        RichText::new(format!("= {}", fmt_ips_plain(lim)))
+                            .monospace().size(10.5).color(DIM),
+                    );
+                }
             });
         });
 
@@ -552,10 +679,134 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu) {
         });
 }
 
-// ── FLASH tab ─────────────────────────────────────────────────────────────────
+// break tab
+fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
+    section_label(ui, "BREAKPOINTS");
+    ui.add_space(4.0);
 
+    // new breakpoint
+    Frame::NONE
+        .stroke(Stroke::new(1.0, DIM))
+        .inner_margin(Margin::same(6))
+        .show(ui, |ui| {
+            ui.label(RichText::new("NEW BREAKPOINT").monospace().size(11.0).color(START_GREEN_DIM));
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Addr (hex):").monospace().size(11.0).color(DIM));
+                ui.add(
+                    egui::TextEdit::singleline(&mut bp.new_addr_text)
+                        .desired_width(56.0)
+                        .font(egui::TextStyle::Monospace),
+                );
+            });
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Action:").monospace().size(11.0).color(DIM));
+                egui::ComboBox::from_id_salt("bp_action")
+                    .selected_text(
+                        RichText::new(bp.new_action.label()).monospace().size(11.0).color(START_GREEN),
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.style_mut().visuals.override_text_color = Some(START_GREEN);
+                        for a in [BpAction::Pause, BpAction::PrintTerm, BpAction::PrintAndPause] {
+                            ui.selectable_value(
+                                &mut bp.new_action, a,
+                                RichText::new(a.label()).monospace().size(11.0),
+                            );
+                        }
+                    });
+            });
+            if bp.new_action != BpAction::Pause {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Message:").monospace().size(11.0).color(DIM));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut bp.new_message)
+                            .desired_width(150.0)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                });
+            }
+            ui.add_space(4.0);
+            if ui.add(
+                Button::new(RichText::new("ADD").monospace().size(11.5).color(START_GREEN))
+                    .fill(Color32::from_rgb(6, 20, 6))
+                    .stroke(Stroke::new(1.0, START_GREEN)),
+            ).clicked() {
+                let addr_str = bp.new_addr_text.trim().trim_start_matches("0x");
+                if let Ok(addr) = u16::from_str_radix(addr_str, 16) {
+                    let msg = if bp.new_action != BpAction::Pause && !bp.new_message.is_empty() {
+                        bp.new_message.clone()
+                    } else {
+                        format!("BREAKPOINT hit @ 0x{addr:04X}")
+                    };
+                    bp.breakpoints.push(Breakpoint {
+                        addr,
+                        action: bp.new_action,
+                        message: msg,
+                        enabled: true,
+                    });
+                    bp.new_addr_text.clear();
+                }
+            }
+        });
+
+    ui.add_space(6.0);
+
+    // bp list
+    if bp.breakpoints.is_empty() {
+        ui.label(RichText::new("  (none)").monospace().size(11.0).color(DIM));
+        return;
+    }
+
+    let mut to_remove: Option<usize> = None;
+    for (i, b) in bp.breakpoints.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut b.enabled, "");
+            let addr_col = if b.enabled { AMBER } else { DIM };
+            ui.label(
+                RichText::new(format!("0x{:04X}", b.addr))
+                    .monospace().size(11.5).color(addr_col),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(b.action.label())
+                    .monospace().size(10.5).color(START_GREEN_DIM),
+            );
+            if !b.message.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!("\"{}\"", b.message))
+                        .monospace().size(10.5).color(DIM),
+                );
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button(
+                    RichText::new("✕").monospace().size(11.0).color(ERR_RED)
+                ).clicked() {
+                    to_remove = Some(i);
+                }
+            });
+        });
+    }
+    if let Some(i) = to_remove { bp.breakpoints.remove(i); }
+
+    ui.add_space(6.0);
+    if !bp.breakpoints.is_empty() {
+        if ui.add(
+            Button::new(RichText::new("CLEAR ALL").monospace().size(10.5).color(DIM))
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::new(1.0, DIM)),
+        ).clicked() {
+            bp.breakpoints.clear();
+        }
+    }
+}
+
+// flash
 fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
-    // ── Header + sub-page nav ─────────────────────────────────────────────────
+    // header
     section_label(ui, &format!(
         "FLASH  0x0000–0xFFFF  ({} words)  page {}/{}",
         FLASH_WORDS, s.page + 1, FLASH_TOTAL_PAGES,
@@ -571,7 +822,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
         }
         ui.add_space(6.0);
 
-        // Fixed quick-tabs for pages 1–5
+        // fixed quick-tabs for pages 1–5
         for p in 0..5usize {
             if flash_page_btn(ui, &format!("{}", p + 1), s.page == p).clicked() {
                 s.page    = p;
@@ -580,7 +831,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
         }
         ui.add_space(4.0);
 
-        // If current page is outside 1–5 and not the last, show its number in amber
+        // if current page is outside 1–5 and not the last, show its number in diff color
         if s.page >= 5 && s.page < FLASH_TOTAL_PAGES - 1 {
             ui.label(
                 RichText::new(format!("[{}]", s.page + 1))
@@ -611,7 +862,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
 
         ui.add_space(4.0);
 
-        // Last page always visible
+        // last page always visible
         let last = FLASH_TOTAL_PAGES - 1;
         if flash_page_btn(ui, &format!("{}", FLASH_TOTAL_PAGES), s.page == last).clicked() {
             s.page    = last;
@@ -623,7 +874,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
     ui.separator();
     ui.add_space(2.0);
 
-    // ── Column header ─────────────────────────────────────────────────────────
+    // col header
     ui.label(
         RichText::new("   ADDR  WORDS         DISASM")
             .monospace().size(11.0).color(START_GREEN_DIM),
@@ -631,7 +882,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
     ui.separator();
     ui.add_space(2.0);
 
-    // ── Instruction rows ──────────────────────────────────────────────────────
+    // instruction rows
     let page_start = (s.page * FLASH_PER_PAGE) as u32;
     let page_end   = (page_start + FLASH_PER_PAGE as u32).min(FLASH_WORDS as u32);
 
@@ -653,14 +904,14 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
         let is_pc    = addr == cpu.pc as u32;
         let all_zero = op == 0 && (nwords == 1 || op2 == 0);
 
-        // Accumulate zero runs (never skip the PC row)
+        // accumulate zero runs (never skip the PC row)
         if all_zero && !is_pc {
             if zero_run_start.is_none() { zero_run_start = Some(addr); }
             addr += nwords as u32;
             continue;
         }
 
-        // Emit a skip marker when the zero run ends
+        // skip marker when the zero run ends
         if let Some(start) = zero_run_start.take() {
             let count = addr - start;
             ui.label(
@@ -669,7 +920,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
             );
         }
 
-        // Row
+        // row
         let arrow     = if is_pc { "\u{2192}" } else { " " };
         let words_str = if nwords == 2 {
             format!("{op:04X} {op2:04X}")
@@ -690,7 +941,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
         addr += nwords as u32;
     }
 
-    // Trailing zero-run marker
+    // trailing zero-run marker
     if let Some(start) = zero_run_start.take() {
         let count = page_end - start;
         if count > 0 {
@@ -702,8 +953,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState) {
     }
 }
 
-// ── Widget / formatting helpers ───────────────────────────────────────────────
-
+// format helper
 fn flash_page_btn(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
     let color  = if selected { AMBER }                          else { START_GREEN_DIM };
     let fill   = if selected { Color32::from_rgb(30, 20, 0) }  else { Color32::from_rgb(6, 16, 6) };
@@ -783,6 +1033,10 @@ fn assemble_btn(ui: &mut Ui, label: &str) -> egui::Response {
 
 fn fmt_ips(ips: f64, running: bool) -> String {
     if !running && ips == 0.0 { return "---".into(); }
+    fmt_ips_plain(ips)
+}
+
+fn fmt_ips_plain(ips: f64) -> String {
     if ips >= 1_000_000.0 {
         format!("{:.2} MIPS", ips / 1_000_000.0)
     } else if ips >= 1_000.0 {

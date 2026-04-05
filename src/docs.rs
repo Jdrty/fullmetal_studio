@@ -533,12 +533,19 @@ pub fn show_isa_window(ctx: &egui::Context, open: &mut bool) {
 // rendering_helpers
 
 fn col_legend(ui: &mut Ui) {
-    ui.label(
-        RichText::new("MNEMONIC   OPERANDS     DESCRIPTION                                                FLAGS        CLK")
-            .monospace()
-            .size(11.0)
-            .color(DIM),
-    );
+    // use the same Grid settings as show_section so columns align with the data
+    Grid::new("isa_col_legend")
+        .num_columns(5)
+        .min_col_width(20.0)
+        .spacing([10.0, 1.5])
+        .show(ui, |ui| {
+            ui.label(RichText::new(format!("{:<7}", "MNEM")).monospace().size(12.5).color(DIM));
+            ui.label(RichText::new(format!("{:<12}", "OPERANDS")).monospace().size(11.5).color(DIM));
+            ui.label(RichText::new("DESCRIPTION").monospace().size(11.5).color(DIM));
+            ui.label(RichText::new(format!("{:<12}", "FLAGS")).monospace().size(11.5).color(DIM));
+            ui.label(RichText::new("CLK").monospace().size(11.5).color(DIM));
+            ui.end_row();
+        });
 }
 
 fn show_section(ui: &mut Ui, section: &Section) {

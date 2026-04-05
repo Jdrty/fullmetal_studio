@@ -210,6 +210,7 @@ impl Cpu {
     }
 
     /// run_timed ~millis ms → (total_steps, last_result)
+    #[allow(dead_code)]
     pub fn run_timed(&mut self, millis: u64) -> (u64, StepResult) {
         let budget = std::time::Duration::from_millis(millis);
         let t0     = std::time::Instant::now();
@@ -221,6 +222,64 @@ impl Cpu {
             if r != StepResult::Ok { return (total, r); }
             if t0.elapsed() >= budget { return (total, StepResult::Ok); }
         }
+    }
+
+    /// like run_timed but stops early when PC hits a breakpoint address.
+    /// returns (steps, result, breakpoint_hit_addr).
+    pub fn run_timed_break(
+        &mut self,
+        millis: u64,
+        breakpoints: &[u16],
+    ) -> (u64, StepResult, Option<u16>) {
+        let budget = std::time::Duration::from_millis(millis);
+        let t0     = std::time::Instant::now();
+        let mut total = 0u64;
+
+        if breakpoints.is_empty() {
+            // fast path: no breakpoints — use the same 100k batch loop as run_timed
+            loop {
+                let (n, r) = self.step_n(100_000);
+                self.tick_timers();
+                total += n as u64;
+                if r != StepResult::Ok { return (total, r, None); }
+                if t0.elapsed() >= budget { return (total, StepResult::Ok, None); }
+            }
+        } else {
+            // slow path: check every PC against the breakpoint list
+            loop {
+                let pc16 = self.pc as u16;
+                if breakpoints.contains(&pc16) {
+                    return (total, StepResult::Ok, Some(pc16));
+                }
+                let r = self.step();
+                total += 1;
+                if r != StepResult::Ok { return (total, r, None); }
+                if total % 10_000 == 0 {
+                    self.tick_timers();
+                    if t0.elapsed() >= budget { return (total, StepResult::Ok, None); }
+                }
+            }
+        }
+    }
+
+    /// run exactly `steps` instructions per frame (for IPS-limited auto mode).
+    pub fn run_n_break(
+        &mut self,
+        steps: u64,
+        breakpoints: &[u16],
+    ) -> (u64, StepResult, Option<u16>) {
+        let mut done = 0u64;
+        while done < steps {
+            let pc16 = self.pc as u16;
+            if !breakpoints.is_empty() && breakpoints.contains(&pc16) {
+                return (done, StepResult::Ok, Some(pc16));
+            }
+            let r = self.step();
+            done += 1;
+            if r != StepResult::Ok { return (done, r, None); }
+        }
+        self.tick_timers();
+        (done, StepResult::Ok, None)
     }
 
 

@@ -14,7 +14,10 @@ use crate::avr::cpu::StepResult;
 use crate::avr::Cpu;
 use crate::editor::TextEditor;
 use crate::docs::{show_flash_locations_window, show_isa_window};
-use crate::sim_panel::{show_sim_panel, FlashState, SimAction, SimTab};
+use crate::sim_panel::{
+    show_sim_panel, BreakpointState, BpAction, FlashState, SimAction, SimTab,
+    SpeedLimitState,
+};
 use crate::toolbar::{show_toolbar, ToolbarAction};
 use crate::word_helper::{show_word_helper, WordHelperState};
 use crate::welcome::{
@@ -169,11 +172,16 @@ pub struct LainApp {
     show_flash_locations: bool,
     show_word_helper: bool,
     word_helper_state: WordHelperState,
+    speed_limit: SpeedLimitState,
+    breakpoints: BreakpointState,
     // auto_run_state
     auto_running: bool,
     ips: f64,
     ips_sample_start: std::time::Instant,
     ips_sample_steps: u64,
+    // token-bucket for the IPS speed limiter (wall-clock based, not frame-dt)
+    limit_clock:      std::time::Instant,
+    limit_steps_done: u64,
 }
 
 impl LainApp {
@@ -193,10 +201,14 @@ impl LainApp {
             show_flash_locations: false,
             show_word_helper: false,
             word_helper_state: WordHelperState::default(),
+            speed_limit: SpeedLimitState::default(),
+            breakpoints: BreakpointState::default(),
             auto_running: false,
             ips: 0.0,
             ips_sample_start: std::time::Instant::now(),
             ips_sample_steps: 0,
+            limit_clock:      std::time::Instant::now(),
+            limit_steps_done: 0,
         }
     }
 
@@ -460,6 +472,13 @@ impl LainApp {
                     .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                     .collapsible(false)
                     .resizable(false)
+                    .frame(
+                        Frame::NONE
+                            .fill(Color32::from_rgb(3, 8, 3))
+                            .stroke(Stroke::new(1.5, START_GREEN_DIM))
+                            .corner_radius(CornerRadius::ZERO)
+                            .inner_margin(Margin::same(14)),
+                    )
                     .show(ctx, |ui| {
                         ui.label("Create a new directory under the current project.");
                         ui.add_space(8.0);
@@ -491,6 +510,13 @@ impl LainApp {
                     .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                     .collapsible(false)
                     .resizable(false)
+                    .frame(
+                        Frame::NONE
+                            .fill(Color32::from_rgb(3, 8, 3))
+                            .stroke(Stroke::new(1.5, START_GREEN_DIM))
+                            .corner_radius(CornerRadius::ZERO)
+                            .inner_margin(Margin::same(14)),
+                    )
                     .show(ctx, |ui| {
                         ui.label("Create a new file under the current project.");
                         ui.add_space(8.0);
@@ -532,6 +558,13 @@ impl LainApp {
                     .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                     .collapsible(false)
                     .resizable(false)
+                    .frame(
+                        Frame::NONE
+                            .fill(Color32::from_rgb(3, 8, 3))
+                            .stroke(Stroke::new(1.5, START_GREEN_DIM))
+                            .corner_radius(CornerRadius::ZERO)
+                            .inner_margin(Margin::same(14)),
+                    )
                     .show(ctx, |ui| {
                         ui.label("Save the current file before opening another folder?");
                         if let Some(message) = err.as_ref() {
@@ -641,6 +674,8 @@ impl eframe::App for LainApp {
                             self.auto_running,
                             self.ips,
                             &mut self.flash_state,
+                            &mut self.speed_limit,
+                            &mut self.breakpoints,
                         );
                     } else if self.show_word_helper {
                         // collect .lain files from workspace for the helper dropdowns
@@ -787,13 +822,58 @@ impl eframe::App for LainApp {
                     // reset_ips_window_on_run
                     self.ips_sample_start = std::time::Instant::now();
                     self.ips_sample_steps = 0;
+                    // reset_token_bucket
+                    self.limit_clock      = std::time::Instant::now();
+                    self.limit_steps_done = 0;
                 }
             }
         }
 
-        // auto_run_12ms_run_timed
+        // auto_run loop with optional IPS cap and breakpoint support
         if self.auto_running {
-            let (steps, result) = self.sim.run_timed(12);
+            let bp_addrs  = self.breakpoints.active_addrs();
+            let limit_ips = self.speed_limit.limit_ips();
+
+            let (steps, result, bp_hit) = if let Some(limit) = limit_ips {
+                // token-bucket: compare wall-clock elapsed against steps already done
+                // this is independent of frame-rate so the limit is always accurate
+                let elapsed = self.limit_clock.elapsed().as_secs_f64();
+                let allowed = (limit * elapsed) as u64;
+                let to_run  = allowed.saturating_sub(self.limit_steps_done);
+
+                if to_run > 0 {
+                    // cap each burst to ~20 ms worth to keep the UI responsive
+                    let burst_cap = ((limit * 0.020) as u64).max(1);
+                    let batch = to_run.min(burst_cap);
+                    let r = self.sim.run_n_break(batch, &bp_addrs);
+                    self.limit_steps_done += r.0;
+                    r
+                } else {
+                    // ahead of budget — skip this frame, wake up soon
+                    ctx.request_repaint_after(std::time::Duration::from_micros(500));
+                    (0, StepResult::Ok, None)
+                }
+            } else {
+                // unlimited: run for 12 ms
+                self.sim.run_timed_break(12, &bp_addrs)
+            };
+
+            // reset the bucket every 10 s to prevent u64 overflow / drift
+            if self.limit_clock.elapsed().as_secs_f64() > 10.0 {
+                self.limit_clock      = std::time::Instant::now();
+                self.limit_steps_done = 0;
+            }
+
+            if let Some(bp_addr) = bp_hit {
+                if let Some(bp) = self.breakpoints.breakpoints.iter().find(|b| b.addr == bp_addr) {
+                    let should_pause = matches!(bp.action, BpAction::Pause | BpAction::PrintAndPause);
+                    if should_pause {
+                        self.auto_running = false;
+                        self.set_status(format!("Breakpoint hit @ 0x{bp_addr:04X}"));
+                    }
+                }
+            }
+
             if result != StepResult::Ok {
                 self.sim_last_result = Some(result);
                 self.auto_running = false;
