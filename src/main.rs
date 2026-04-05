@@ -1,6 +1,7 @@
 //! entry
 
 mod avr;
+mod boot_video;
 mod cycle_helper;
 mod docs;
 mod editor;

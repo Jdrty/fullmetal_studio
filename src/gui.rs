@@ -9,6 +9,7 @@ use eframe::egui::{
     Frame, Id, Margin, RichText, Stroke, TextStyle, TopBottomPanel, Visuals, Window,
 };
 
+use crate::boot_video::BootVideo;
 use crate::avr::assembler::assemble;
 use crate::avr::cpu::StepResult;
 use crate::avr::Cpu;
@@ -160,6 +161,7 @@ struct StatusMessage {
 }
 
 pub struct LainApp {
+    boot_video: BootVideo,
     phase: AppPhase,
     editor: TextEditor,
     modal: ModalState,
@@ -193,6 +195,7 @@ impl LainApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
         Self {
+            boot_video: BootVideo::new(),
             phase: AppPhase::Welcome,
             editor: TextEditor::new(Id::new("main_editor")),
             modal: ModalState::None,
@@ -659,6 +662,20 @@ impl LainApp {
 
 impl eframe::App for LainApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.boot_video.done() {
+            egui::CentralPanel::default()
+                .frame(
+                    Frame::NONE
+                        .fill(Color32::BLACK)
+                        .inner_margin(Margin::ZERO),
+                )
+                .show(ctx, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    self.boot_video.show(ctx, ui);
+                });
+            return;
+        }
+
         let mut toolbar_action = ToolbarAction::None;
 
         if let AppPhase::Editor { workspace } = &self.phase {
