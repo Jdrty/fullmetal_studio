@@ -36,9 +36,9 @@ pub struct BootVideo {
 }
 
 impl BootVideo {
-    pub fn new() -> Self {
+    pub fn new(skip: bool) -> Self {
         Self {
-            phase: Phase::NeedSpawn,
+            phase: if skip { Phase::Done } else { Phase::NeedSpawn },
             shown: 0,
             texture: None,
             buf: Vec::new(),

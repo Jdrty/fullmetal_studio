@@ -4,16 +4,13 @@ use std::f32::consts::{SQRT_2, TAU};
 use std::sync::{Arc, OnceLock};
 
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{self, Color32, FontId, Image, RichText, Stroke, Ui, Vec2};
+use eframe::egui::{self, Color32, FontId, Image, RichText, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::welcome_font;
 
-/// App-wide accent green (editor, sim, helpers, toolbar, docs, modals).
 pub const START_GREEN: Color32 = Color32::from_rgb(0x0b, 0xca, 0x0b);
 
 pub const START_GREEN_DIM: Color32 = START_GREEN;
-
-// --- Welcome-only spec (outline / glow); fill matches [`START_GREEN`] ---
 
 pub const WELCOME_FILL: Color32 = START_GREEN;
 pub const WELCOME_OUTLINE: Color32 = Color32::from_rgb(0x21, 0x3f, 0x00);
@@ -71,7 +68,6 @@ fn oct_offsets(r: f32) -> [(f32, f32); 8] {
     ]
 }
 
-/// Layered draws approximating anisotropic outer glow + thick outline + inner fill glow.
 fn paint_welcome_text_glow(ui: &Ui, galley: Arc<egui::Galley>, pos: egui::Pos2, font_size: f32) {
     let painter = ui.painter();
 
@@ -134,6 +130,34 @@ fn paint_welcome_text_glow(ui: &Ui, galley: Arc<egui::Galley>, pos: egui::Pos2, 
     painter.galley_with_override_text_color(pos, galley, WELCOME_FILL);
 }
 
+/// Start buttons: faint hover fill, then a thin `#0bca0b` stroke (no thick soft rects — those
+/// covered the interior and hid the hover tint).
+fn paint_welcome_button_frame(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    ref_px: f32,
+    hovered: bool,
+) {
+    let cr = egui::CornerRadius::ZERO;
+    if hovered {
+        painter.rect_filled(rect, cr, START_GREEN.gamma_multiply(0.1));
+    }
+
+    let stroke_w = (ref_px * 0.055).clamp(1.0, 1.45);
+    painter.rect_stroke(
+        rect.expand(0.5),
+        cr,
+        Stroke::new(1.0, START_GREEN.gamma_multiply(0.18)),
+        StrokeKind::Outside,
+    );
+    painter.rect_stroke(
+        rect,
+        cr,
+        Stroke::new(stroke_w, START_GREEN),
+        StrokeKind::Inside,
+    );
+}
+
 fn centered_welcome_line(ui: &mut Ui, text: &str, font_size: f32, letter_sp: f32) {
     let galley = layout_welcome_galley(ui, text, font_size, letter_sp);
     let size = galley.size();
@@ -171,12 +195,8 @@ fn clamp_banner_height(size: Vec2, max_h: f32) -> Vec2 {
 
 struct WelcomeStartButton {
     pub response: egui::Response,
-    /// Label bounds (for sizing the cross-out over the other row).
-    pub text_rect: egui::Rect,
-    pub font_px: f32,
 }
 
-/// Same glow/outline as titles.
 fn welcome_start_button(ui: &mut Ui, label: &str, font_px: f32) -> WelcomeStartButton {
     let galley = layout_welcome_galley(ui, label, font_px, 0.0);
     let text_size = galley.size();
@@ -188,157 +208,49 @@ fn welcome_start_button(ui: &mut Ui, label: &str, font_px: f32) -> WelcomeStartB
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(((ui.available_width() - hit_size.x) * 0.5).max(0.0));
         let (rect, response) = ui.allocate_exact_size(hit_size, egui::Sense::click());
+        paint_welcome_button_frame(&ui.painter(), rect, font_px, response.hovered());
         let text_rect = egui::Rect::from_center_size(rect.center(), text_size);
         paint_welcome_text_glow(ui, galley, text_rect.min, font_px);
-        out = Some(WelcomeStartButton {
-            response,
-            text_rect,
-            font_px,
-        });
+        out = Some(WelcomeStartButton { response });
     });
     out.expect("horizontal always runs")
 }
 
-#[derive(Clone, Default)]
-struct WelcomeCrossAnim {
-    /// 0 = none, 1 = open hovered (cross create), 2 = create hovered (cross open)
-    mode: u8,
-    phase: u8,
-    stroke0_start: f32,
-    stroke1_start: f32,
-}
+/// Top bar: neon `#0bca0b` box outline; interior filled green when checked.
+fn skip_boot_checkbox(ui: &mut Ui, checked: &mut bool) {
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let box_s = 20.0_f32;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(box_s, box_s), egui::Sense::click());
+        if response.clicked() {
+            *checked = !*checked;
+        }
 
-#[inline]
-fn ease_out_cubic(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    1.0 - (1.0 - t).powi(3)
-}
-
-/// Screen-space axis-aligned blur for one straight segment `from` → `to`.
-fn paint_line_axis_blur(
-    painter: &egui::Painter,
-    from: egui::Pos2,
-    to: egui::Pos2,
-    color: Color32,
-    stroke_w: f32,
-    soft_x: f32,
-    soft_y: f32,
-    peak_alpha: f32,
-    grid: i32,
-) {
-    let g = grid.max(2);
-    for ix in 0..g {
-        for iy in 0..g {
-            let nx = (ix as f32 / (g - 1) as f32) * 2.0 - 1.0;
-            let ny = (iy as f32 / (g - 1) as f32) * 2.0 - 1.0;
-            let ell = (nx * nx + ny * ny).min(1.0);
-            let a = (1.0 - ell).powf(2.35) * peak_alpha;
-            if a < 0.0025 {
-                continue;
-            }
-            let off = egui::vec2(nx * soft_x, ny * soft_y);
-            painter.line_segment(
-                [from + off, to + off],
-                Stroke::new(stroke_w, color.gamma_multiply(a)),
+        let painter = ui.painter();
+        let cr = egui::CornerRadius::same(3);
+        for i in 0..3 {
+            let expand = i as f32 * 1.05 + 0.4;
+            let a = 0.14 - i as f32 * 0.04;
+            painter.rect_stroke(
+                rect.expand(expand),
+                cr,
+                Stroke::new(1.0, START_GREEN.gamma_multiply(a)),
+                StrokeKind::Outside,
             );
         }
-    }
-}
-
-/// One diagonal: grows from **midpoint of that line** toward both corners (`from` and `to`) as `progress` 0→1.
-fn paint_welcome_x_straight_pencil(
-    painter: &egui::Painter,
-    from: egui::Pos2,
-    to: egui::Pos2,
-    font_px: f32,
-    _seed: u32,
-    progress: f32,
-) {
-    let progress = progress.clamp(0.0, 1.0);
-    if progress <= 0.0 {
-        return;
-    }
-
-    let mid = from.lerp(to, 0.5);
-    let tip_a = mid.lerp(from, progress);
-    let tip_b = mid.lerp(to, progress);
-
-    let soft_x = font_px * 2.25;
-    let soft_y = font_px * 1.92;
-    let blur_w = (font_px * OUTLINE_THICK_REL * 1.45).max(0.85);
-
-    const BLUR_GRID: i32 = 13;
-    const X_STROKE_ALPHA: f32 = 0.68;
-
-    let border_w = (font_px * 0.168).max(2.4);
-    let core_w = (border_w * 0.44).max(font_px * 0.068);
-
-    let paint_half = |a: egui::Pos2, b: egui::Pos2| {
-        if (b - a).length() < 1e-4 {
-            return;
+        painter.rect_stroke(
+            rect,
+            cr,
+            Stroke::new(1.85, START_GREEN),
+            StrokeKind::Inside,
+        );
+        if *checked {
+            let inset = (box_s * 0.24).max(3.5);
+            painter.rect_filled(rect.shrink(inset), cr, START_GREEN);
         }
-        paint_line_axis_blur(
-            painter,
-            a,
-            b,
-            Color32::BLACK,
-            blur_w * 1.2,
-            soft_x,
-            soft_y,
-            0.052 * X_STROKE_ALPHA,
-            BLUR_GRID,
-        );
-        paint_line_axis_blur(
-            painter,
-            a,
-            b,
-            WELCOME_FILL,
-            blur_w * 1.05,
-            soft_x * 0.9,
-            soft_y * 0.9,
-            0.068 * X_STROKE_ALPHA,
-            BLUR_GRID,
-        );
-        painter.line_segment(
-            [a, b],
-            Stroke::new(border_w, Color32::BLACK.gamma_multiply(X_STROKE_ALPHA)),
-        );
-        painter.line_segment(
-            [a, b],
-            Stroke::new(core_w, WELCOME_FILL.gamma_multiply(X_STROKE_ALPHA)),
-        );
-    };
 
-    paint_half(mid, tip_a);
-    paint_half(mid, tip_b);
-}
-
-fn cross_out_corners(text_rect: egui::Rect, font_px: f32) -> (egui::Pos2, egui::Pos2, egui::Pos2, egui::Pos2) {
-    let pad_x = font_px * 0.34 + 2.75;
-    let pad_y = font_px * 0.28 + 2.25;
-    let r = text_rect.expand2(egui::vec2(pad_x, pad_y));
-    let inset = (font_px * 0.12).max(1.0);
-    let tl = r.left_top() + Vec2::splat(inset);
-    let br = r.right_bottom() - Vec2::splat(inset);
-    let tr = r.right_top() + Vec2::new(-inset, inset);
-    let bl = r.left_bottom() + Vec2::new(inset, -inset);
-    (tl, br, tr, bl)
-}
-
-/// Animated X: each arm grows from its line midpoint toward both corners; black border + X/Y blur.
-fn paint_welcome_cross_out(
-    ui: &Ui,
-    text_rect: egui::Rect,
-    font_px: f32,
-    prog1: f32,
-    prog2: f32,
-    seed1: u32,
-    seed2: u32,
-) {
-    let painter = ui.painter();
-    let (tl, br, tr, bl) = cross_out_corners(text_rect, font_px);
-    paint_welcome_x_straight_pencil(&painter, tl, br, font_px, seed1, prog1);
-    paint_welcome_x_straight_pencil(&painter, tr, bl, font_px, seed2, prog2);
+        ui.label(RichText::new("Skip start animation").color(START_GREEN));
+    });
 }
 
 pub enum WelcomeAction {
@@ -347,8 +259,17 @@ pub enum WelcomeAction {
     CreateNew,
 }
 
-pub fn show_welcome(ui: &mut Ui) -> WelcomeAction {
+pub fn show_welcome(ui: &mut Ui, skip_start_animation: &mut bool) -> WelcomeAction {
     let mut action = WelcomeAction::None;
+
+    let panel = ui.max_rect();
+    let toggle_rect = egui::Rect::from_min_size(
+        panel.left_top() + egui::vec2(16.0, 12.0),
+        egui::vec2(300.0, 32.0),
+    );
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(toggle_rect), |ui| {
+        skip_boot_checkbox(ui, skip_start_animation);
+    });
 
     let avail_w = ui.available_width();
     let pct = size_factor();
@@ -382,85 +303,7 @@ pub fn show_welcome(ui: &mut Ui) -> WelcomeAction {
             action = WelcomeAction::CreateNew;
         }
 
-        const STROKE_SECS: f32 = 0.38;
-        let cross_id = egui::Id::new("lainstudio_welcome_cross_anim");
-        let now = ui.ctx().input(|i| i.time) as f32;
-
-        let desired_mode: u8 = if btn_open.response.hovered() {
-            1
-        } else if btn_create.response.hovered() {
-            2
-        } else {
-            0
-        };
-
-        let (prog1, prog2, animating) = ui.ctx().data_mut(|d| {
-            let st = d.get_temp_mut_or_default::<WelcomeCrossAnim>(cross_id);
-            if st.mode != desired_mode {
-                st.mode = desired_mode;
-                st.phase = 0;
-                if desired_mode != 0 {
-                    st.stroke0_start = now;
-                }
-            }
-
-            if desired_mode == 0 {
-                return (0.0f32, 0.0f32, false);
-            }
-
-            let mut p1 = 0.0f32;
-            let mut p2 = 0.0f32;
-            let mut need_repaint = true;
-
-            if st.phase == 0 {
-                let t = ((now - st.stroke0_start) / STROKE_SECS).clamp(0.0, 1.0);
-                p1 = ease_out_cubic(t);
-                if t >= 1.0 {
-                    st.phase = 1;
-                    st.stroke1_start = now;
-                    p1 = 1.0;
-                }
-            }
-
-            if st.phase >= 1 {
-                p1 = 1.0;
-                let t = ((now - st.stroke1_start) / STROKE_SECS).clamp(0.0, 1.0);
-                p2 = ease_out_cubic(t);
-                if t >= 1.0 {
-                    need_repaint = false;
-                }
-            }
-
-            (p1, p2, need_repaint)
-        });
-
-        if desired_mode == 1 {
-            // Open hovered → cross out Create (different seeds → different rough X shape/size)
-            paint_welcome_cross_out(
-                ui,
-                btn_create.text_rect,
-                btn_create.font_px,
-                prog1,
-                prog2,
-                0x5EED_C0u32,
-                0x71CE_u32,
-            );
-        } else if desired_mode == 2 {
-            paint_welcome_cross_out(
-                ui,
-                btn_open.text_rect,
-                btn_open.font_px,
-                prog1,
-                prog2,
-                0xBEE2_u32,
-                0xC0DE_u32,
-            );
-        }
-
         ui.add_space(sp(28.0));
-        if animating {
-            ui.ctx().request_repaint();
-        }
 
         let max_banner_h = (ui.available_height() - MARGIN).max(0.0);
         let banner_natural = banner_size_for_width(content_w);

@@ -21,6 +21,38 @@ impl std::fmt::Display for AsmError {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AsmSegment {
+    /// Program memory (default); `.BYTE` is for `.DSEG` / `.ESEG` only (AVR-style).
+    Code,
+    Data,
+    Eeprom,
+}
+
+/// `.cseg` / `.dseg` / `.eseg` on a line (optionally after a label), nothing else on the line.
+fn parse_segment_directive(instr_part: &str) -> Option<AsmSegment> {
+    let s = instr_part.trim();
+    let mut it = s.split_whitespace();
+    let head = it.next()?.to_uppercase();
+    if it.next().is_some() {
+        return None;
+    }
+    match head.as_str() {
+        ".CSEG" => Some(AsmSegment::Code),
+        ".DSEG" => Some(AsmSegment::Data),
+        ".ESEG" => Some(AsmSegment::Eeprom),
+        _ => None,
+    }
+}
+
+fn is_dot_byte_directive(instr: &str) -> bool {
+    instr
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .eq_ignore_ascii_case(".byte")
+}
+
 /// Assemble source and also return a source-map of (1-indexed line → word address).
 /// Only instruction lines appear in the map; labels, directives, and blanks are omitted.
 /// The map is sorted by line number ascending.
@@ -56,6 +88,7 @@ fn assemble_inner(
     // pass_1 labels_org_addr
     let mut labels: HashMap<String, u32> = HashMap::new();
     let mut addr: u32 = 0;
+    let mut segment = AsmSegment::Code;
     for raw in source.lines() {
         let line = strip_comment(raw).trim();
         if line.is_empty() { continue; }
@@ -64,9 +97,22 @@ fn assemble_inner(
             addr = new_addr;
             continue;
         }
-        let is_data = is_data_directive(line);
-        if line.starts_with('.') && !is_data { continue; } // skip non-data directives
         let (maybe_label, instr_part) = split_label_instr(line);
+        if let Some(seg) = parse_segment_directive(instr_part) {
+            segment = seg;
+            if let Some(lbl) = maybe_label {
+                labels.insert(lbl.to_lowercase(), addr);
+            }
+            continue;
+        }
+        // Illegal in pass2 as well; skip sizing so labels stay consistent when the line errors out.
+        if segment == AsmSegment::Code && is_dot_byte_directive(instr_part) {
+            continue;
+        }
+        let is_data = is_data_directive(instr_part);
+        if maybe_label.is_none() && line.starts_with('.') && !is_data {
+            continue; // skip non-data directives
+        }
         if let Some(lbl) = maybe_label {
             labels.insert(lbl.to_lowercase(), addr);
         }
@@ -80,6 +126,7 @@ fn assemble_inner(
     let mut source_map: Vec<(usize, u32)> = Vec::new();
     let mut errors:     Vec<AsmError>     = Vec::new();
     addr = 0;
+    let mut segment = AsmSegment::Code;
     for (idx, raw) in source.lines().enumerate() {
         let line_nr = idx + 1;
         let line    = strip_comment(raw).trim();
@@ -100,9 +147,22 @@ fn assemble_inner(
             }
             continue;
         }
-        let is_data = is_data_directive(line);
-        if line.starts_with('.') && !is_data { continue; } // skip non-data directives
         let (maybe_label, instr_part) = split_label_instr(line);
+        if let Some(seg) = parse_segment_directive(instr_part) {
+            segment = seg;
+            continue;
+        }
+        if segment == AsmSegment::Code && is_dot_byte_directive(instr_part) {
+            errors.push(AsmError {
+                line: line_nr,
+                msg: ".BYTE is not allowed in the code segment (.CSEG); use .DB for byte constants in flash or place .BYTE under .DSEG".to_string(),
+            });
+            continue;
+        }
+        let is_data = is_data_directive(instr_part);
+        if maybe_label.is_none() && line.starts_with('.') && !is_data {
+            continue; // skip non-data directives
+        }
         // pure label line – nothing to encode
         if maybe_label.is_some() && instr_part.is_empty() { continue; }
         let instr_line = if maybe_label.is_some() { instr_part } else { line };
@@ -112,6 +172,7 @@ fn assemble_inner(
             Err(msg)    => errors.push(AsmError { line: line_nr, msg }),
         }
     }
+    errors.sort_by_key(|e| e.line);
     if errors.is_empty() { Ok((words, source_map)) } else { Err(errors) }
 }
 
@@ -521,14 +582,14 @@ fn rewrite_local_refs(
 
 fn is_data_directive(line: &str) -> bool {
     let m = line.split_whitespace().next().unwrap_or("").to_uppercase();
-    matches!(m.as_str(), ".BYTE" | ".WORD" | ".SHORT")
+    matches!(m.as_str(), ".BYTE" | ".DB" | ".WORD" | ".SHORT")
 }
 
 fn instruction_words(line: &str) -> u32 {
     let (m, rest) = line.split_once(|c: char| c.is_whitespace()).unwrap_or((line, ""));
     match m.to_uppercase().as_str() {
         "LDS" | "STS" | "JMP" | "CALL" => 2,
-        ".BYTE" => {
+        ".BYTE" | ".DB" => {
             // each pair of bytes → 1 word; at least 1 word
             let count = rest.split(',').filter(|s| !s.trim().is_empty()).count();
             ((count as u32 + 1) / 2).max(1)
@@ -552,8 +613,8 @@ fn encode(
     let rest = rest.trim();
     let m = mnem_raw.to_uppercase();
 
-    // data_directives
-    if m == ".BYTE" {
+    // data_directives — `.DB` = flash bytes in .CSEG (AVR); `.BYTE` is only valid in .DSEG / .ESEG (checked in assemble_inner).
+    if m == ".BYTE" || m == ".DB" {
         let bytes: Vec<u8> = rest.split(',')
             .filter(|s| !s.trim().is_empty())
             .map(|s| sym(s.trim(), equates).map(|v| v as u8))
@@ -1447,5 +1508,27 @@ mod tests {
         let errs = assemble("LDI R0, 5").unwrap_err();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].msg.contains("R16"));
+    }
+
+    #[test]
+    fn asm_byte_in_cseg_rejected() {
+        let errs = assemble(".BYTE 0xc3").unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].msg.contains(".BYTE"));
+        assert!(errs[0].msg.contains(".CSEG"));
+        let errs2 = assemble("foo: .BYTE 1").unwrap_err();
+        assert_eq!(errs2.len(), 1);
+    }
+
+    #[test]
+    fn asm_byte_under_dseg_ok() {
+        let words = assemble(".DSEG\n.BYTE 0xc3").unwrap();
+        assert_eq!(words, &[0x00C3]);
+    }
+
+    #[test]
+    fn asm_db_in_cseg_ok() {
+        assert_eq!(assemble(".DB 0xc3").unwrap(), &[0x00C3]);
+        assert_eq!(assemble(".CSEG\n.DB 0x01, 0x02").unwrap(), &[0x0201]);
     }
 }

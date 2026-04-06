@@ -1,5 +1,3 @@
-//! Optional **Yu Gothic Medium** for the welcome screen only (system or `assets/fonts/`).
-
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -20,8 +18,7 @@ fn font_candidates() -> Vec<PathBuf> {
     v
 }
 
-/// Insert Yu Gothic when a font file is found; otherwise use existing `lain_title` (Orbitron).
-/// Call once from [`crate::gui::setup_style`] before [`eframe::egui::Context::set_fonts`].
+/// call once from [`crate::gui::setup_style`] before [`eframe::egui::Context::set_fonts`]
 pub fn setup(fonts: &mut FontDefinitions) {
     if WELCOME_FAMILY.get().is_some() {
         return;

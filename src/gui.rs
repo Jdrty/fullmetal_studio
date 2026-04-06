@@ -185,6 +185,8 @@ pub struct LainApp {
     cycle_helper_state: CycleHelperState,
     stack_state: StackState,
     xmem_state:  XmemState,
+    /// Persisted; when true, `fake.mov` boot is skipped on next launch.
+    skip_start_animation: bool,
     speed_limit: SpeedLimitState,
     breakpoints: BreakpointState,
     // auto_run_state
@@ -200,8 +202,12 @@ pub struct LainApp {
 impl LainApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
+        let skip_start_animation = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, "skip_start_animation"))
+            .unwrap_or(false);
         Self {
-            boot_video: BootVideo::new(),
+            boot_video: BootVideo::new(skip_start_animation),
             phase: AppPhase::Welcome,
             editor: TextEditor::new(Id::new("main_editor")),
             modal: ModalState::None,
@@ -227,6 +233,7 @@ impl LainApp {
             ips_sample_steps: 0,
             limit_clock:      std::time::Instant::now(),
             limit_steps_done: 0,
+            skip_start_animation,
         }
     }
 
@@ -744,7 +751,7 @@ impl eframe::App for LainApp {
                 ui.set_min_size(ui.available_size());
 
                 match &mut self.phase {
-                    AppPhase::Welcome => match show_welcome(ui) {
+                    AppPhase::Welcome => match show_welcome(ui, &mut self.skip_start_animation) {
                         WelcomeAction::OpenFolder => {
                             self.perform_open_folder_picker();
                         }
@@ -951,6 +958,10 @@ impl eframe::App for LainApp {
         show_flash_locations_window(ctx, &mut self.show_flash_locations, &self.sim);
 
         self.show_modal(ctx);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "skip_start_animation", &self.skip_start_animation);
     }
 }
 
