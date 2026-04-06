@@ -130,8 +130,6 @@ fn paint_welcome_text_glow(ui: &Ui, galley: Arc<egui::Galley>, pos: egui::Pos2, 
     painter.galley_with_override_text_color(pos, galley, WELCOME_FILL);
 }
 
-/// Start buttons: faint hover fill, then a thin `#0bca0b` stroke (no thick soft rects — those
-/// covered the interior and hid the hover tint).
 fn paint_welcome_button_frame(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -216,40 +214,28 @@ fn welcome_start_button(ui: &mut Ui, label: &str, font_px: f32) -> WelcomeStartB
     out.expect("horizontal always runs")
 }
 
-/// Top bar: neon `#0bca0b` box outline; interior filled green when checked.
-fn skip_boot_checkbox(ui: &mut Ui, checked: &mut bool) {
+/// Same neon frame as start buttons; label uses welcome font + glow/outline.
+fn skip_boot_checkbox(ui: &mut Ui, checked: &mut bool, label_px: f32, letter_sp: f32, stroke_ref_px: f32) {
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
-        let box_s = 20.0_f32;
+        let box_s = (label_px * 1.08).clamp(12.0, 18.0);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(box_s, box_s), egui::Sense::click());
         if response.clicked() {
             *checked = !*checked;
         }
 
         let painter = ui.painter();
-        let cr = egui::CornerRadius::same(3);
-        for i in 0..3 {
-            let expand = i as f32 * 1.05 + 0.4;
-            let a = 0.14 - i as f32 * 0.04;
-            painter.rect_stroke(
-                rect.expand(expand),
-                cr,
-                Stroke::new(1.0, START_GREEN.gamma_multiply(a)),
-                StrokeKind::Outside,
-            );
-        }
-        painter.rect_stroke(
-            rect,
-            cr,
-            Stroke::new(1.85, START_GREEN),
-            StrokeKind::Inside,
-        );
+        paint_welcome_button_frame(&painter, rect, stroke_ref_px, response.hovered());
         if *checked {
-            let inset = (box_s * 0.24).max(3.5);
+            let cr = egui::CornerRadius::ZERO;
+            let inset = (box_s * 0.22).max(3.2);
             painter.rect_filled(rect.shrink(inset), cr, START_GREEN);
         }
 
-        ui.label(RichText::new("Skip start animation").color(START_GREEN));
+        let galley = layout_welcome_galley(ui, "Skip start animation", label_px, letter_sp);
+        let text_size = galley.size();
+        let (text_rect, _) = ui.allocate_exact_size(text_size, egui::Sense::hover());
+        paint_welcome_text_glow(ui, galley, text_rect.min, label_px);
     });
 }
 
@@ -263,14 +249,6 @@ pub fn show_welcome(ui: &mut Ui, skip_start_animation: &mut bool) -> WelcomeActi
     let mut action = WelcomeAction::None;
 
     let panel = ui.max_rect();
-    let toggle_rect = egui::Rect::from_min_size(
-        panel.left_top() + egui::vec2(16.0, 12.0),
-        egui::vec2(300.0, 32.0),
-    );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(toggle_rect), |ui| {
-        skip_boot_checkbox(ui, skip_start_animation);
-    });
-
     let avail_w = ui.available_width();
     let pct = size_factor();
     let content_w = ((avail_w - 2.0 * MARGIN).max(300.0) * pct).max(200.0);
@@ -284,6 +262,17 @@ pub fn show_welcome(ui: &mut Ui, skip_start_animation: &mut bool) -> WelcomeActi
     let letter_sp = 2.0 * scale;
     let sub_letter_sp = 3.0 * scale;
     let sp = |n: f32| -> f32 { n * scale };
+
+    let skip_label_px = (subtitle_px * 0.48).max(8.5);
+    let skip_letter_sp = sub_letter_sp * 0.48;
+    let skip_galley = layout_welcome_galley(ui, "Skip start animation", skip_label_px, skip_letter_sp);
+    let box_s = (skip_label_px * 1.08).clamp(12.0, 18.0);
+    let row_h = (box_s.max(skip_galley.size().y) + 10.0).max(28.0);
+    let toggle_w = (16.0 + box_s + 10.0 + skip_galley.size().x + 20.0).min((panel.width() - 32.0).max(200.0));
+    let toggle_rect = egui::Rect::from_min_size(panel.left_top() + egui::vec2(16.0, 12.0), egui::vec2(toggle_w, row_h));
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(toggle_rect), |ui| {
+        skip_boot_checkbox(ui, skip_start_animation, skip_label_px, skip_letter_sp, skip_label_px);
+    });
 
     ui.vertical_centered(|ui| {
         ui.add_space(MARGIN);

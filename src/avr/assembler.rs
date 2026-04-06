@@ -23,7 +23,7 @@ impl std::fmt::Display for AsmError {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AsmSegment {
-    /// Program memory (default); `.BYTE` is for `.DSEG` / `.ESEG` only (AVR-style).
+    /// program memory (default); `.BYTE` is for `.DSEG` / `.ESEG` only
     Code,
     Data,
     Eeprom,
@@ -53,9 +53,8 @@ fn is_dot_byte_directive(instr: &str) -> bool {
         .eq_ignore_ascii_case(".byte")
 }
 
-/// Assemble source and also return a source-map of (1-indexed line → word address).
-/// Only instruction lines appear in the map; labels, directives, and blanks are omitted.
-/// The map is sorted by line number ascending.
+/// assemble source and also return a source-map of (1-indexed line → word address)
+/// only instruction lines appear in the map; labels, directives, and blanks are omitted
 pub fn assemble_full(
     source: &str,
 ) -> Result<(Vec<u16>, Vec<(usize, u32)>), Vec<AsmError>> {
@@ -105,7 +104,7 @@ fn assemble_inner(
             }
             continue;
         }
-        // Illegal in pass2 as well; skip sizing so labels stay consistent when the line errors out.
+        // illegal in pass2 as well
         if segment == AsmSegment::Code && is_dot_byte_directive(instr_part) {
             continue;
         }

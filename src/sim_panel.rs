@@ -1,8 +1,8 @@
 //! avr_sim_panel tabs cpu ports timers sram
 
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, Frame, Grid, Key, Layout, Margin,
-    RichText, ScrollArea, Stroke, TextEdit, Ui, Window,
+    self, Align, Align2, Button, Color32, Frame, Grid, Key, Label, Layout, Margin,
+    RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, Window,
 };
 
 use crate::avr::cpu::{
@@ -429,6 +429,16 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
     section_label(ui, "GPIO PORTS  (DDR=0 INPUT, DDR=1 OUTPUT)");
     ui.add_space(6.0);
 
+    let xmem_active = !cpu.xmem.is_empty();
+    let (xmem_portc_n, xmem_portc_mask) = if xmem_active {
+        let sz = cpu.xmem.len() as u32;
+        let n = xmem_portc_pins(sz);
+        let m = if n >= 8 { 0xFF } else { (1u8 << n).wrapping_sub(1) };
+        (n, m)
+    } else {
+        (0u8, 0u8)
+    };
+
     ui.label(
         RichText::new("PORT  DDR   OUT   PIN   7 6 5 4 3 2 1 0")
             .monospace().size(11.5).color(START_GREEN_DIM),
@@ -441,34 +451,70 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
         let ddr  = cpu.read_mem(ddr_addr);
         let pin  = cpu.read_mem(pin_addr);
 
-        let mut bits   = String::with_capacity(16);
-        let mut colors: Vec<Color32> = Vec::with_capacity(16);
-        for bit in (0..8u8).rev() {
-            let is_out = (ddr >> bit) & 1 != 0;
-            let high   = if is_out { (port >> bit) & 1 != 0 }
-                         else      { (pin  >> bit) & 1 != 0 };
-            if is_out {
-                if high { bits.push('\u{2588}'); colors.push(AMBER); }
-                else    { bits.push('\u{2591}'); colors.push(START_GREEN_DIM); }
-            } else {
-                bits.push('\u{00B7}'); colors.push(DIM);
-            }
-            bits.push(' ');
-            colors.push(DIM);
-        }
-
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("{name}     {ddr:02X}    {port:02X}    {pin:02X}    "))
                     .monospace().size(12.0).color(START_GREEN),
             );
-            for (i, ch) in bits.chars().enumerate() {
-                if ch == ' ' { continue; }
-                let bit_idx = i / 2;
-                let col = colors[i];
-                ui.label(RichText::new(ch.to_string()).monospace().size(13.0).color(col));
-                if bit_idx < 7 { ui.add_space(-4.0); }
+            for bit in (0..8u8).rev() {
+                let xmem_pin = xmem_active
+                    && match name {
+                        "A" => true,
+                        "C" => xmem_portc_n > 0 && (xmem_portc_mask & (1u8 << bit)) != 0,
+                        "G" => bit < 3,
+                        _ => false,
+                    };
+                let is_out = (ddr >> bit) & 1 != 0;
+                let high   = if is_out { (port >> bit) & 1 != 0 }
+                             else      { (pin  >> bit) & 1 != 0 };
+                let (ch, col) = if is_out {
+                    if high { ('\u{2588}', AMBER) } else { ('\u{2591}', START_GREEN_DIM) }
+                } else {
+                    ('\u{00B7}', DIM)
+                };
+
+                ui.scope(|ui| {
+                    ui.set_width(10.0);
+                    const XMEM_OUT_LOW: char = '\u{2504}'; // ┄ light triple dash
+                    let dot_r = 2.05;
+                    let label = if xmem_pin {
+                        if is_out {
+                            if high {
+                                Label::new(
+                                    RichText::new('\u{2588}'.to_string())
+                                        .monospace()
+                                        .size(13.0)
+                                        .color(ERR_RED),
+                                )
+                            } else {
+                                Label::new(
+                                    RichText::new(XMEM_OUT_LOW.to_string())
+                                        .monospace()
+                                        .size(13.0)
+                                        .color(ERR_RED),
+                                )
+                            }
+                        } else {
+                            Label::new(
+                                RichText::new(ch.to_string())
+                                    .monospace()
+                                    .size(13.0)
+                                    .color(Color32::TRANSPARENT),
+                            )
+                        }
+                    } else {
+                        Label::new(RichText::new(ch.to_string()).monospace().size(13.0).color(col))
+                    };
+                    let resp = ui.add(label.sense(Sense::hover()));
+                    if xmem_pin && !is_out {
+                        ui.painter()
+                            .circle_filled(resp.rect.center(), dot_r, ERR_RED);
+                    }
+                });
+                if bit > 0 {
+                    ui.add_space(-4.0);
+                }
             }
         });
     }
@@ -480,6 +526,13 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
         RichText::new("  \u{2588} OUT HIGH    \u{2591} OUT LOW    \u{00B7} INPUT")
             .monospace().size(11.0).color(START_GREEN_DIM),
     );
+    if xmem_active {
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new("  XMEM: input = red dot (·); output low = red dashes (┄); output high = red █")
+                .monospace().size(11.0).color(ERR_RED),
+        );
+    }
 }
 
 // timers_tab
