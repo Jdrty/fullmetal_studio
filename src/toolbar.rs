@@ -8,6 +8,7 @@ use eframe::egui::{
     Stroke, Ui,
 };
 
+use crate::avr::McuModel;
 use crate::welcome::{START_GREEN, START_GREEN_DIM};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +58,8 @@ pub fn show_toolbar(
     sim_visible:     bool,
     upload_visible:  bool,
     helpers_visible: bool,
+    workspace_model:   McuModel,
+    ed060sc4_sim:      &mut bool,
 ) -> ToolbarAction {
     let mut action = ToolbarAction::None;
 
@@ -130,6 +133,33 @@ pub fn show_toolbar(
                 {
                     action = ToolbarAction::UploadTogglePanel;
                 }
+
+                ui.menu_button(
+                    RichText::new("MISC")
+                        .font(title_font(18.0))
+                        .color(START_GREEN),
+                    |ui| {
+                        apply_dropdown_style(ui);
+                        let ed060_128a = workspace_model == McuModel::Atmega128A;
+                        ui.add_enabled_ui(ed060_128a, |ui| {
+                            let _ = ui.checkbox(
+                                ed060sc4_sim,
+                                RichText::new("ED060SC4 Simulator")
+                                    .monospace()
+                                    .size(13.0)
+                                    .color(START_GREEN),
+                            );
+                        });
+                        if !ed060_128a {
+                            ui.label(
+                                RichText::new("ATmega128A only")
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(Color32::from_gray(100)),
+                            );
+                        }
+                    },
+                );
 
                 ui.menu_button(
                     RichText::new("DOCS")

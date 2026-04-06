@@ -24,7 +24,7 @@ use crate::docs::{show_flash_locations_window, show_isa_window};
 use crate::cycle_helper::{show_cycle_helper, CycleHelperState};
 use crate::sim_panel::{
     show_sim_panel, BreakpointState, BpAction, FlashState, SimAction, SimTab,
-    SpeedLimitState, StackState, XmemState,
+    SpeedLimitState, StackState, XmemState, XMEM_MAX,
 };
 use crate::toolbar::{show_toolbar, ToolbarAction};
 use crate::upload_panel::{scan_serial_ports, show_upload_panel, UploadAction};
@@ -199,6 +199,8 @@ pub struct LainApp {
     cycle_helper_state: CycleHelperState,
     stack_state: StackState,
     xmem_state:  XmemState,
+    /// ED060SC4 panel helper (ATmega128A only): max XMEM + purple PORTS highlights + EINK tab.
+    ed060sc4_sim: bool,
     /// Persisted; when true, `fake.mov` boot is skipped on next launch.
     skip_start_animation: bool,
     speed_limit: SpeedLimitState,
@@ -247,6 +249,7 @@ impl LainApp {
             cycle_helper_state: CycleHelperState::default(),
             stack_state: StackState::default(),
             xmem_state:  XmemState::default(),
+            ed060sc4_sim: false,
             speed_limit: SpeedLimitState::default(),
             breakpoints: BreakpointState::default(),
             auto_running: false,
@@ -332,6 +335,7 @@ impl LainApp {
             }
         }
         self.sim = Cpu::new_for_model(workspace.model);
+        self.ed060sc4_sim = false;
         self.phase = AppPhase::Editor { workspace };
         self.modal = ModalState::None;
     }
@@ -1086,6 +1090,10 @@ impl eframe::App for LainApp {
         let mut toolbar_action = ToolbarAction::None;
 
         if let AppPhase::Editor { workspace } = &self.phase {
+            if workspace.model == McuModel::Atmega328P {
+                self.ed060sc4_sim = false;
+            }
+            let ed060_was = self.ed060sc4_sim;
             TopBottomPanel::top("retro_toolbar")
                 .exact_height(44.0)
                 .show(ctx, |ui| {
@@ -1097,8 +1105,14 @@ impl eframe::App for LainApp {
                         self.show_sim,
                         self.show_upload,
                         self.show_word_helper || self.show_cycle_helper,
+                        workspace.model,
+                        &mut self.ed060sc4_sim,
                     );
                 });
+            if self.ed060sc4_sim && !ed060_was {
+                self.sim.configure_xmem(XMEM_MAX);
+                self.xmem_state.size_text = XMEM_MAX.to_string();
+            }
 
             let files = list_workspace_supported_files(&workspace.root);
             let active = workspace.active_file.clone();
@@ -1184,6 +1198,9 @@ impl eframe::App for LainApp {
                             &self.upload_status_line,
                         );
                     } else if self.show_sim {
+                        if !self.ed060sc4_sim && self.sim_tab == SimTab::Eink {
+                            self.sim_tab = SimTab::Cpu;
+                        }
                         sim_action = show_sim_panel(
                             ui,
                             &self.sim,
@@ -1196,6 +1213,7 @@ impl eframe::App for LainApp {
                             &mut self.breakpoints,
                             &mut self.stack_state,
                             &mut self.xmem_state,
+                            self.ed060sc4_sim,
                         );
                     } else if self.show_word_helper {
                         let files = self.collect_lain_files();
@@ -1483,21 +1501,7 @@ fn read_text_file(path: &Path) -> Result<String, String> {
 }
 
 fn find_first_supported_file(root: &Path) -> Option<PathBuf> {
-    let mut pending = vec![root.to_path_buf()];
-
-    while let Some(dir) = pending.pop() {
-        let entries = fs::read_dir(&dir).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else if is_supported_text_file(&path) {
-                return Some(path);
-            }
-        }
-    }
-
-    None
+    list_workspace_supported_files(root).into_iter().next()
 }
 
 /// mkdir_project parent_name_lainfile
@@ -1574,6 +1578,33 @@ fn normalize_include_path(base_dir: &Path, include: &str) -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
+fn strip_asm_line_comment(line: &str) -> &str {
+    let line = line.find(';').map(|i| &line[..i]).unwrap_or(line);
+    line.find('#').map(|i| &line[..i]).unwrap_or(line)
+}
+
+fn split_leading_include_block(source: &str) -> (Vec<String>, String) {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut targets = Vec::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        let raw = lines[i];
+        let t = strip_asm_line_comment(raw).trim();
+        if t.is_empty() {
+            i += 1;
+            continue;
+        }
+        if let Some(target) = parse_include_target(raw) {
+            targets.push(target.to_string());
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    let rest = lines[i..].join("\n");
+    (targets, rest)
+}
+
 fn expand_source_with_includes(
     workspace: &Workspace,
     active_path: &Path,
@@ -1613,10 +1644,12 @@ fn expand_source_inner(
     }
     stack.push(current_norm.clone());
 
+    let (leading_targets, rest) = split_leading_include_block(source);
+    let base_dir = current_norm.parent().unwrap_or(&workspace.root);
     let mut included_once = HashSet::<PathBuf>::new();
-    for line in source.lines() {
+
+    for line in rest.lines() {
         if let Some(target) = parse_include_target(line) {
-            let base_dir = current_norm.parent().unwrap_or(&workspace.root);
             let include_path = normalize_include_path(base_dir, target);
             if !include_path.starts_with(&workspace.root) {
                 return Err(format!(
@@ -1648,6 +1681,36 @@ fn expand_source_inner(
         }
         out.push_str(line);
         out.push('\n');
+    }
+
+    for target in leading_targets {
+        let include_path = normalize_include_path(&base_dir, &target);
+        if !include_path.starts_with(&workspace.root) {
+            return Err(format!(
+                "Include escapes workspace: {}",
+                include_path.display()
+            ));
+        }
+        if !included_once.insert(include_path.clone()) {
+            continue;
+        }
+        let include_source = if let Some((active_path, src)) = active_override {
+            if include_path == active_path {
+                src.to_string()
+            } else {
+                read_text_file(&include_path)?
+            }
+        } else {
+            read_text_file(&include_path)?
+        };
+        expand_source_inner(
+            workspace,
+            &include_path,
+            &include_source,
+            active_override,
+            stack,
+            out,
+        )?;
     }
 
     let _ = stack.pop();

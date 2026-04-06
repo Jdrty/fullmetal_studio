@@ -14,12 +14,14 @@ use crate::welcome::{START_GREEN, START_GREEN_DIM};
 const AMBER:   Color32 = Color32::from_rgb(255, 185, 55);
 const DIM:     Color32 = Color32::from_rgb(65,  65,  65);
 const ERR_RED: Color32 = Color32::from_rgb(255, 80,  80);
+const EINK_PURPLE:     Color32 = Color32::from_rgb(180, 100, 255);
+const EINK_PURPLE_DIM: Color32 = Color32::from_rgb(90,  55,  120);
 
 // public_types
 const FLASH_PER_PAGE: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SimTab { Cpu, Ports, Timers, Sram, Flash, Break, Stack }
+pub enum SimTab { Cpu, Ports, Timers, Sram, Flash, Break, Stack, Eink }
 
 // stack_popup_state
 pub struct StackState {
@@ -28,8 +30,6 @@ pub struct StackState {
 impl Default for StackState {
     fn default() -> Self { Self { popup_open: false } }
 }
-
-// ── IPS speed-limit state ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IpsUnit { Ips, Kips, Mips }
@@ -56,7 +56,6 @@ impl Default for SpeedLimitState {
 }
 
 impl SpeedLimitState {
-    /// Resolved limit in IPS, or None if disabled / invalid.
     pub fn limit_ips(&self) -> Option<f64> {
         if !self.enabled { return None; }
         self.value_text.trim().parse::<f64>().ok()
@@ -64,8 +63,6 @@ impl SpeedLimitState {
             .map(|v| v * self.unit.multiplier())
     }
 }
-
-// ── Breakpoint state ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BpAction { Pause, PrintTerm, PrintAndPause }
@@ -128,7 +125,6 @@ impl Default for FlashState {
     }
 }
 
-/// Max external SRAM addressable by ATmega128A: 0x1100–0xFFFF = 61184 bytes.
 pub const XMEM_MAX: u32 = 0xEF00;
 
 pub struct XmemState {
@@ -153,7 +149,69 @@ pub enum SimAction {
     SetXmem(u32),
 }
 
-// entry_point
+fn sim_green_tab_button(ui: &mut Ui, active_tab: &mut SimTab, tab: SimTab, label: &'static str) -> egui::Response {
+    let selected = *active_tab == tab;
+    let color = if selected { START_GREEN } else { DIM };
+    let fill = if selected { Color32::from_rgb(8, 24, 8) } else { Color32::from_rgb(3, 7, 3) };
+    let stroke_col = if selected { START_GREEN } else { DIM };
+    let resp = ui.add(
+        Button::new(RichText::new(label).monospace().size(11.5).color(color))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, stroke_col)),
+    );
+    if resp.clicked() {
+        *active_tab = tab;
+    }
+    resp
+}
+
+fn eink_tab_bar_button(ui: &mut Ui, active_tab: &mut SimTab) {
+    let tab = SimTab::Eink;
+    let selected = *active_tab == tab;
+    let color = if selected { EINK_PURPLE } else { EINK_PURPLE_DIM };
+    let fill = if selected { Color32::from_rgb(24, 8, 32) } else { Color32::from_rgb(8, 4, 12) };
+    let stroke_col = if selected { EINK_PURPLE } else { EINK_PURPLE_DIM };
+    let resp = ui.add(
+        Button::new(RichText::new("EINK").monospace().size(11.5).color(color))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, stroke_col)),
+    );
+    if resp.clicked() {
+        *active_tab = tab;
+    }
+}
+
+fn eink_section_gap(ui: &mut Ui) {
+    ui.add_space(14.0);
+}
+
+fn eink_pin_explain_line(ui: &mut Ui, pin_fn: &str, explanation: &str) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(pin_fn)
+                .monospace()
+                .size(11.0)
+                .color(EINK_PURPLE),
+        );
+        ui.label(
+            RichText::new(explanation)
+                .monospace()
+                .size(11.0)
+                .color(START_GREEN_DIM),
+        );
+    });
+}
+
+fn eink_section_heading(ui: &mut Ui, text: &str) {
+    ui.label(
+        RichText::new(text)
+            .strong()
+            .monospace()
+            .size(13.5)
+            .color(START_GREEN),
+    );
+}
+
 
 pub fn show_sim_panel(
     ui:            &mut Ui,
@@ -167,6 +225,7 @@ pub fn show_sim_panel(
     bp_state:      &mut BreakpointState,
     stack_state:   &mut StackState,
     xmem_state:    &mut XmemState,
+    ed060sc4:      bool,
 ) -> SimAction {
     let mut action = SimAction::None;
 
@@ -177,11 +236,19 @@ pub fn show_sim_panel(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
 
-            // sticky_header
-            ui.label(
-                RichText::new(format!("[ AVR SIM  {} ]", cpu.model.label()))
-                    .monospace().size(13.0).color(START_GREEN),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("[ AVR SIM  {} ]", cpu.model.label()))
+                        .monospace()
+                        .size(13.0)
+                        .color(START_GREEN),
+                );
+                if ed060sc4 {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        eink_tab_bar_button(ui, active_tab);
+                    });
+                }
+            });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label(
@@ -201,7 +268,9 @@ pub fn show_sim_panel(
             });
             ui.add_space(6.0);
 
-            // tab_bar
+            // tab_bar — even spacing (FLASH–BREAK–STACK)
+            // (use horizontal(), not with_layout(left_to_right): the latter grows to fill panel height
+            // and pushes scroll area + controls to the bottom)
             ui.horizontal(|ui| {
                 for (tab, label) in [
                     (SimTab::Cpu,    "CPU"),
@@ -210,22 +279,10 @@ pub fn show_sim_panel(
                     (SimTab::Sram,   "SRAM"),
                     (SimTab::Flash,  "FLASH"),
                     (SimTab::Break,  "BREAK"),
-                    (SimTab::Stack,  "STACK"),
                 ] {
-                    let selected   = *active_tab == tab;
-                    let color      = if selected { START_GREEN } else { DIM };
-                    let fill       = if selected { Color32::from_rgb(8, 24, 8) }
-                                     else        { Color32::from_rgb(3, 7, 3) };
-                    let stroke_col = if selected { START_GREEN } else { DIM };
-                    let resp = ui.add(
-                        Button::new(
-                            RichText::new(label).monospace().size(11.5).color(color),
-                        )
-                        .fill(fill)
-                        .stroke(Stroke::new(1.0, stroke_col)),
-                    );
-                    if resp.clicked() { *active_tab = tab; }
+                    sim_green_tab_button(ui, active_tab, tab, label);
                 }
+                sim_green_tab_button(ui, active_tab, SimTab::Stack, "STACK");
             });
             ui.separator();
             ui.add_space(4.0);
@@ -239,12 +296,13 @@ pub fn show_sim_panel(
                 .show(ui, |ui| -> SimAction {
                     match *active_tab {
                         SimTab::Cpu    => { show_cpu_tab(ui, cpu, last_result); SimAction::None }
-                        SimTab::Ports  => { show_ports_tab(ui, cpu);            SimAction::None }
+                        SimTab::Ports  => { show_ports_tab(ui, cpu, ed060sc4);    SimAction::None }
                         SimTab::Timers => show_timers_tab(ui, cpu),
                         SimTab::Sram   => show_sram_tab(ui, cpu, xmem_state),
                         SimTab::Flash  => { show_flash_tab(ui, cpu, flash_state); SimAction::None }
                         SimTab::Break  => { show_break_tab(ui, bp_state);       SimAction::None }
                         SimTab::Stack  => show_stack_tab(ui, cpu, stack_state),
+                        SimTab::Eink   => { show_eink_tab(ui);                  SimAction::None }
                     }
                 }).inner;
             if action == SimAction::None { action = tab_action; }
@@ -423,7 +481,85 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>) {
 
 // ports_tab
 
-fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
+fn ed060_gpio_pin(port: &str, bit: u8) -> bool {
+    match port {
+        "B" => matches!(bit, 0 | 5 | 6 | 7),
+        "D" => true,
+        "E" => bit >= 2,
+        _ => false,
+    }
+}
+
+fn show_eink_tab(ui: &mut Ui) {
+    ui.label(
+        RichText::new("ED060SC4  (800×600)")
+            .strong()
+            .monospace()
+            .size(14.0)
+            .color(EINK_PURPLE),
+    );
+    ui.add_space(8.0);
+    eink_section_heading(ui, "FULL PANEL (VERTICAL)");
+    ui.add_space(4.0);
+    eink_pin_explain_line(
+        ui,
+        "PE3 SPV",
+        " — pulse → new frame; row pointer to top row",
+    );
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "PE4 CKV",
+        " — pulse low→high→low; advance active row down one (600 rows / frame)",
+    );
+    eink_section_gap(ui);
+    eink_section_heading(ui, "ONE ROW (800 PIXELS ON PD BUS)");
+    ui.add_space(4.0);
+    eink_pin_explain_line(ui, "PB0 SPH", " — low; open row for shifting data in");
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "PD0–PD7",
+        " — pixel data: 2 bits / pixel → 00 hold, 01 black, 10 white, 11 unused",
+    );
+    ui.add_space(2.0);
+    eink_pin_explain_line(ui, "PB6 CL", " — pulse; clock PD7:0 into row memory");
+    ui.add_space(2.0);
+    eink_pin_explain_line(ui, "PB5 LE", " — latch; hold row data on column drivers");
+    ui.add_space(2.0);
+    eink_pin_explain_line(ui, "PE2 OE", " — fills / updates physical e-ink from latched data");
+    eink_section_gap(ui);
+    eink_section_heading(ui, "POWER & GATES");
+    ui.add_space(4.0);
+    eink_pin_explain_line(ui, "PB7", " — e-ink panel power");
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "GMODE",
+        " — TFT row gate enable; off after each full frame, on before the next (limits ghosting)",
+    );
+    eink_section_gap(ui);
+    ui.separator();
+    ui.add_space(4.0);
+    eink_section_heading(ui, "SEQUENCE (SUMMARY)");
+    ui.add_space(4.0);
+    for s in [
+        "1) Pulse SPV — start at row 0",
+        "2) Per row: SPH low → shift 800 pixels with CL + PD → LE latch → release SPH as needed",
+        "3) Pulse CKV — move to next row",
+        "4) Repeat steps 2–3 for 600 rows",
+    ] {
+        ui.label(
+            RichText::new(s)
+                .monospace()
+                .size(11.0)
+                .color(START_GREEN_DIM),
+        );
+        ui.add_space(2.0);
+    }
+}
+
+fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, ed060_on: bool) {
     section_label(ui, "GPIO PORTS  (DDR=0 INPUT, DDR=1 OUTPUT)");
     ui.add_space(6.0);
 
@@ -463,6 +599,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
                         "G" => bit < 3,
                         _ => false,
                     };
+                let eink_pin = ed060_on && ed060_gpio_pin(name, bit);
                 let is_out = (ddr >> bit) & 1 != 0;
                 let high   = if is_out { (port >> bit) & 1 != 0 }
                              else      { (pin  >> bit) & 1 != 0 };
@@ -474,7 +611,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
 
                 ui.scope(|ui| {
                     ui.set_width(10.0);
-                    const XMEM_OUT_LOW: char = '\u{2504}'; // diff for red idk
+                    const ALT_OUT_LOW: char = '\u{2504}';
                     let dot_r = 2.05;
                     let label = if xmem_pin {
                         if is_out {
@@ -487,10 +624,35 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
                                 )
                             } else {
                                 Label::new(
-                                    RichText::new(XMEM_OUT_LOW.to_string())
+                                    RichText::new(ALT_OUT_LOW.to_string())
                                         .monospace()
                                         .size(13.0)
                                         .color(ERR_RED),
+                                )
+                            }
+                        } else {
+                            Label::new(
+                                RichText::new(ch.to_string())
+                                    .monospace()
+                                    .size(13.0)
+                                    .color(Color32::TRANSPARENT),
+                            )
+                        }
+                    } else if eink_pin {
+                        if is_out {
+                            if high {
+                                Label::new(
+                                    RichText::new('\u{2588}'.to_string())
+                                        .monospace()
+                                        .size(13.0)
+                                        .color(EINK_PURPLE),
+                                )
+                            } else {
+                                Label::new(
+                                    RichText::new(ALT_OUT_LOW.to_string())
+                                        .monospace()
+                                        .size(13.0)
+                                        .color(EINK_PURPLE_DIM),
                                 )
                             }
                         } else {
@@ -508,6 +670,9 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
                     if xmem_pin && !is_out {
                         ui.painter()
                             .circle_filled(resp.rect.center(), dot_r, ERR_RED);
+                    } else if eink_pin && !is_out {
+                        ui.painter()
+                            .circle_filled(resp.rect.center(), dot_r, EINK_PURPLE);
                     }
                 });
                 if bit > 0 {
@@ -527,8 +692,19 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
     if xmem_active {
         ui.add_space(2.0);
         ui.label(
-            RichText::new("")
-                .monospace().size(11.0).color(ERR_RED),
+            RichText::new("  red \u{2588} / \u{2504} / dot — XMEM addr or data (Port A, C MSBs, G2:0)")
+                .monospace()
+                .size(11.0)
+                .color(ERR_RED),
+        );
+    }
+    if ed060_on {
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new("  purple \u{2588} / \u{2504} / dot — ED060SC4 (PB0,5,6,7  PD  PE2–7)")
+                .monospace()
+                .size(11.0)
+                .color(EINK_PURPLE),
         );
     }
 }
