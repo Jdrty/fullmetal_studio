@@ -214,7 +214,6 @@ fn welcome_start_button(ui: &mut Ui, label: &str, font_px: f32) -> WelcomeStartB
     out.expect("horizontal always runs")
 }
 
-/// Same neon frame as start buttons; label uses welcome font + glow/outline.
 fn skip_boot_checkbox(ui: &mut Ui, checked: &mut bool, label_px: f32, letter_sp: f32, stroke_ref_px: f32) {
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 10.0;

@@ -476,7 +476,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
 
                 ui.scope(|ui| {
                     ui.set_width(10.0);
-                    const XMEM_OUT_LOW: char = '\u{2504}'; // ┄ light triple dash
+                    const XMEM_OUT_LOW: char = '\u{2504}'; // diff for red idk
                     let dot_r = 2.05;
                     let label = if xmem_pin {
                         if is_out {
@@ -529,7 +529,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu) {
     if xmem_active {
         ui.add_space(2.0);
         ui.label(
-            RichText::new("  XMEM: input = red dot (·); output low = red dashes (┄); output high = red █")
+            RichText::new("")
                 .monospace().size(11.0).color(ERR_RED),
         );
     }
