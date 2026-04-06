@@ -1,8 +1,12 @@
 //! application shell
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::thread;
 
 use eframe::egui::{
     self, Align2, Color32, ComboBox, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
@@ -10,9 +14,10 @@ use eframe::egui::{
 };
 
 use crate::boot_video::BootVideo;
-use crate::avr::McuModel;
 use crate::avr::assembler::assemble_for_model;
 use crate::avr::cpu::StepResult;
+use crate::avr::intel_hex::{self, validate_intel_hex};
+use crate::avr::McuModel;
 use crate::avr::Cpu;
 use crate::editor::TextEditor;
 use crate::docs::{show_flash_locations_window, show_isa_window};
@@ -22,12 +27,16 @@ use crate::sim_panel::{
     SpeedLimitState, StackState, XmemState,
 };
 use crate::toolbar::{show_toolbar, ToolbarAction};
+use crate::upload_panel::{scan_serial_ports, show_upload_panel, UploadAction};
 use crate::word_helper::{show_word_helper, WordHelperState};
 use crate::welcome::{
     show_create_project, show_welcome, CreateProjectAction, WelcomeAction, START_GREEN,
     START_GREEN_DIM,
 };
 use crate::welcome_font;
+
+/// Written by “Assemble and Link”; consumed by avrdude.
+const FIRMWARE_HEX: &str = "firmware.hex";
 
 pub fn setup_style(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -162,6 +171,8 @@ enum ModalState {
     ConfirmOpenFolder {
         err: Option<String>,
     },
+    /// macOS: avrdude missing after Upload — offer Homebrew install (may chain silent Homebrew).
+    InstallAvrdudeHomebrew,
 }
 
 struct StatusMessage {
@@ -200,6 +211,14 @@ pub struct LainApp {
     // token-bucket for the IPS speed limiter (wall-clock based, not frame-dt)
     limit_clock:      std::time::Instant,
     limit_steps_done: u64,
+    /// Right panel: firmware hex + avrdude (replaces SIM / helpers while open).
+    show_upload: bool,
+    upload_programmer: String,
+    upload_port: String,
+    /// When true, `-P` is edited as free text; otherwise chosen from the serial port list.
+    upload_port_custom: bool,
+    upload_status_line: String,
+    upload_job_rx: Option<Receiver<String>>,
 }
 
 impl LainApp {
@@ -236,6 +255,12 @@ impl LainApp {
             ips_sample_steps: 0,
             limit_clock:      std::time::Instant::now(),
             limit_steps_done: 0,
+            show_upload: false,
+            upload_programmer: "arduino".to_string(),
+            upload_port: String::new(),
+            upload_port_custom: false,
+            upload_status_line: String::new(),
+            upload_job_rx: None,
             skip_start_animation,
         }
     }
@@ -316,6 +341,314 @@ impl LainApp {
         let active_file = find_first_supported_file(&root);
         self.enter_editor(Workspace { root, active_file, model });
         self.set_status("Opened folder.");
+    }
+
+    fn switch_active_file(&mut self, path: PathBuf) -> Result<String, String> {
+        if self.editor.is_dirty() && self.current_workspace().and_then(|w| w.active_file.as_ref()).is_some() {
+            self.save_current_file()?;
+        }
+        let contents = read_text_file(&path)?;
+        if let Some(workspace) = self.current_workspace_mut() {
+            workspace.active_file = Some(path.clone());
+        }
+        self.editor.set_source(contents);
+        self.editor.focus_next_frame();
+        Ok(format!("Opened {}", path.display()))
+    }
+
+    fn source_for_assembly(&self) -> Result<String, String> {
+        let workspace = self
+            .current_workspace()
+            .ok_or_else(|| "No workspace is open.".to_string())?;
+        let active = workspace
+            .active_file
+            .as_ref()
+            .ok_or_else(|| "No active file selected. Use File > New file first.".to_string())?;
+        expand_source_with_includes(workspace, active, self.editor.source())
+    }
+
+    fn firmware_hex_path(&self) -> Option<PathBuf> {
+        self.current_workspace()
+            .map(|w| w.root.join(FIRMWARE_HEX))
+    }
+
+    fn firmware_hex_exists(&self) -> bool {
+        self.firmware_hex_path()
+            .map(|p| p.is_file())
+            .unwrap_or(false)
+    }
+
+    fn assemble_and_write_firmware_hex(&mut self) -> Result<(), String> {
+        if self.editor.is_dirty() {
+            self.save_current_file()?;
+        }
+        let workspace = self
+            .current_workspace()
+            .ok_or_else(|| "No workspace is open.".to_string())?;
+        let model = workspace.model;
+        let source = self.source_for_assembly()?;
+        let words = assemble_for_model(&source, model).map_err(|errs| {
+            errs.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("   ")
+        })?;
+        let flash_words = model.flash_word_count();
+        let hex_text = intel_hex::flash_words_to_intel_hex(&words, flash_words);
+        validate_intel_hex(&hex_text)?;
+        let path = workspace.root.join(FIRMWARE_HEX);
+        fs::write(&path, &hex_text).map_err(|e| e.to_string())?;
+        self.upload_status_line = format!(
+            "OK: wrote {} — Intel HEX validated, {} words ({} bytes).",
+            path.display(),
+            flash_words,
+            flash_words * 2
+        );
+        Ok(())
+    }
+
+    fn poll_upload_job(&mut self) {
+        let Some(rx) = self.upload_job_rx.take() else {
+            return;
+        };
+        let mut batch = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => batch.push(msg),
+                Err(TryRecvError::Empty) => {
+                    if !batch.is_empty() {
+                        for msg in batch {
+                            self.handle_upload_job_message(msg);
+                        }
+                    }
+                    self.upload_job_rx = Some(rx);
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    for msg in batch {
+                        self.handle_upload_job_message(msg);
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    fn handle_upload_job_message(&mut self, msg: String) {
+        if msg.starts_with("AVRDUDE_MISSING\n") {
+            self.upload_status_line = msg
+                .strip_prefix("AVRDUDE_MISSING\n")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            #[cfg(target_os = "macos")]
+            {
+                self.modal = ModalState::InstallAvrdudeHomebrew;
+            }
+            return;
+        }
+        if msg.starts_with("INSTALL_OK\n") {
+            self.upload_status_line = msg
+                .strip_prefix("INSTALL_OK\n")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            self.spawn_avrdude_upload();
+            return;
+        }
+        if msg.starts_with("INSTALL_FAIL\n") {
+            self.upload_status_line = msg
+                .strip_prefix("INSTALL_FAIL\n")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return;
+        }
+        self.upload_status_line = msg;
+    }
+
+    fn spawn_avrdude_upload(&mut self) {
+        let Some(ws) = self.current_workspace() else {
+            self.upload_status_line = "Error: no workspace open.".to_string();
+            return;
+        };
+        let hex_path = ws.root.join(FIRMWARE_HEX);
+        if !hex_path.is_file() {
+            self.upload_status_line = format!("Error: {} not found. Run Assemble and Link first.", hex_path.display());
+            return;
+        }
+        if self.upload_job_rx.is_some() {
+            self.upload_status_line = "Busy: wait for the current command to finish.".to_string();
+            return;
+        }
+
+        let part = ws.model.avrdude_part().to_string();
+        let prog = self.upload_programmer.trim().to_string();
+        let port = self.upload_port.trim().to_string();
+        if prog.is_empty() {
+            self.upload_status_line = "Error: programmer (-c) is empty.".to_string();
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<String>();
+        self.upload_job_rx = Some(rx);
+        self.upload_status_line = "Looking for avrdude in PATH…".to_string();
+
+        thread::spawn(move || {
+            let found = Command::new("sh")
+                .args(["-c", "command -v avrdude"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if !found {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = tx.send(
+                        "AVRDUDE_MISSING\nError: avrdude not found in PATH. Use “Install” in the dialog to install via Homebrew, or add avrdude to PATH."
+                            .to_string(),
+                    );
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = tx.send(
+                        "Error: avrdude not found in PATH. Install avrdude for your system and ensure it is on PATH."
+                            .to_string(),
+                    );
+                }
+                return;
+            }
+
+            let mut cmd = Command::new("avrdude");
+            cmd.arg("-v")
+                .arg("-p")
+                .arg(&part)
+                .arg("-c")
+                .arg(&prog);
+            if !port.is_empty() {
+                cmd.arg("-P").arg(&port);
+            }
+            cmd.arg("-U")
+                .arg(format!("flash:w:{}:i", hex_path.display()));
+
+            match cmd.output() {
+                Ok(o) => {
+                    let mut s = String::from("Found avrdude in PATH.\n\n");
+                    if !o.stdout.is_empty() {
+                        s.push_str(&String::from_utf8_lossy(&o.stdout));
+                    }
+                    if !o.stderr.is_empty() {
+                        s.push_str(&String::from_utf8_lossy(&o.stderr));
+                    }
+                    if o.status.success() {
+                        s.insert_str(0, "Upload OK.\n");
+                    } else {
+                        s.insert_str(0, "Error: avrdude exited with failure.\n");
+                    }
+                    let _ = tx.send(s);
+                }
+                Err(e) => {
+                    let _ = tx.send(format!("Error: could not run avrdude: {e}"));
+                }
+            }
+        });
+    }
+
+    /// brew and such
+    #[cfg(target_os = "macos")]
+    fn spawn_avrdude_homebrew_install_chain(&mut self) {
+        if self.upload_job_rx.is_some() {
+            self.upload_status_line =
+                "Busy: wait for the current command to finish.".to_string();
+            return;
+        }
+        let (tx, rx) = mpsc::channel::<String>();
+        self.upload_job_rx = Some(rx);
+        self.upload_status_line = "Installing avrdude via Homebrew…".to_string();
+
+        thread::spawn(move || {
+            let brew_install = r#"if command -v brew >/dev/null 2>&1; then brew install avrdude; elif [ -x /opt/homebrew/bin/brew ]; then /opt/homebrew/bin/brew install avrdude; elif [ -x /usr/local/bin/brew ]; then /usr/local/bin/brew install avrdude; else exit 127; fi"#;
+            let shell_has_brew = || {
+                Command::new("/bin/bash")
+                    .arg("-c")
+                    .arg(
+                        "command -v brew >/dev/null 2>&1 || [ -x /opt/homebrew/bin/brew ] || [ -x /usr/local/bin/brew ]",
+                    )
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            };
+
+            let mut log = String::new();
+            log.push_str("Running brew install avrdude…\n\n");
+            match Command::new("/bin/bash")
+                .arg("-c")
+                .arg(brew_install)
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    log.push_str(&String::from_utf8_lossy(&o.stdout));
+                    log.push_str(&String::from_utf8_lossy(&o.stderr));
+                    let _ = tx.send(format!("INSTALL_OK\n{log}"));
+                    return;
+                }
+                Ok(o) => {
+                    log.push_str(&String::from_utf8_lossy(&o.stdout));
+                    log.push_str(&String::from_utf8_lossy(&o.stderr));
+                    if shell_has_brew() {
+                        let _ = tx.send(format!(
+                            "INSTALL_FAIL\n{log}\n\nbrew install avrdude failed while Homebrew is installed. Fix the error above or install avrdude manually."
+                        ));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    log.push_str(&format!("{e}\n"));
+                    if shell_has_brew() {
+                        let _ = tx.send(format!("INSTALL_FAIL\n{log}"));
+                        return;
+                    }
+                }
+            }
+
+            log.push_str(
+                "\nHomebrew not found. Running official installer (NONINTERACTIVE, may take several minutes)…\n\n",
+            );
+            let hb_script = r#"NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#;
+            match Command::new("/bin/bash").arg("-c").arg(hb_script).output() {
+                Ok(o) => {
+                    log.push_str(&String::from_utf8_lossy(&o.stdout));
+                    log.push_str(&String::from_utf8_lossy(&o.stderr));
+                    if !o.status.success() {
+                        log.push_str("\n\nHomebrew installer exited with an error.\n");
+                    }
+                }
+                Err(e) => {
+                    log.push_str(&format!("Could not run Homebrew installer: {e}\n"));
+                }
+            }
+
+            log.push_str("\nRetrying brew install avrdude…\n\n");
+            match Command::new("/bin/bash")
+                .arg("-c")
+                .arg(brew_install)
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    log.push_str(&String::from_utf8_lossy(&o.stdout));
+                    log.push_str(&String::from_utf8_lossy(&o.stderr));
+                    let _ = tx.send(format!("INSTALL_OK\n{log}"));
+                }
+                Ok(o) => {
+                    log.push_str(&String::from_utf8_lossy(&o.stdout));
+                    log.push_str(&String::from_utf8_lossy(&o.stderr));
+                    let _ = tx.send(format!("INSTALL_FAIL\n{log}"));
+                }
+                Err(e) => {
+                    let _ = tx.send(format!("INSTALL_FAIL\n{log}{e}"));
+                }
+            }
+        });
     }
 
     fn save_current_file(&mut self) -> Result<String, String> {
@@ -469,7 +802,16 @@ impl LainApp {
             ToolbarAction::SimTogglePanel => {
                 self.show_sim = !self.show_sim;
                 if self.show_sim {
+                    self.show_upload = false;
                     self.show_word_helper  = false;
+                    self.show_cycle_helper = false;
+                }
+            }
+            ToolbarAction::UploadTogglePanel => {
+                self.show_upload = !self.show_upload;
+                if self.show_upload {
+                    self.show_sim = false;
+                    self.show_word_helper = false;
                     self.show_cycle_helper = false;
                 }
             }
@@ -483,6 +825,7 @@ impl LainApp {
                 self.show_word_helper = !self.show_word_helper;
                 if self.show_word_helper {
                     self.show_sim          = false;
+                    self.show_upload = false;
                     self.show_cycle_helper = false;
                 }
             }
@@ -490,6 +833,7 @@ impl LainApp {
                 self.show_cycle_helper = !self.show_cycle_helper;
                 if self.show_cycle_helper {
                     self.show_sim         = false;
+                    self.show_upload = false;
                     self.show_word_helper = false;
                 }
             }
@@ -504,6 +848,7 @@ impl LainApp {
             CreateFile(String, FileExtension),
             SaveThenOpenFolder,
             DiscardThenOpenFolder,
+            RunAvrdudeHomebrewInstall,
         }
 
         let mut action = ModalAction::None;
@@ -628,6 +973,34 @@ impl LainApp {
                         });
                     });
             }
+            ModalState::InstallAvrdudeHomebrew => {
+                Window::new("Install AVRDUDE Homebrew")
+                    .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                    .collapsible(false)
+                    .resizable(false)
+                    .frame(
+                        Frame::NONE
+                            .fill(Color32::from_rgb(3, 8, 3))
+                            .stroke(Stroke::new(1.5, START_GREEN_DIM))
+                            .corner_radius(CornerRadius::ZERO)
+                            .inner_margin(Margin::same(14)),
+                    )
+                    .show(ctx, |ui| {
+                        ui.label(
+                            "avrdude was not found. This runs brew install avrdude. \
+                             If Homebrew is not installed, the official installer runs next (silent, NONINTERACTIVE; may take several minutes).",
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                action = ModalAction::Close;
+                            }
+                            if ui.button("Install").clicked() {
+                                action = ModalAction::RunAvrdudeHomebrewInstall;
+                            }
+                        });
+                    });
+            }
         }
 
         match action {
@@ -674,6 +1047,17 @@ impl LainApp {
                 self.modal = ModalState::None;
                 self.perform_open_folder_picker();
             }
+            ModalAction::RunAvrdudeHomebrewInstall => {
+                self.modal = ModalState::None;
+                self.editor.focus_next_frame();
+                #[cfg(target_os = "macos")]
+                self.spawn_avrdude_homebrew_install_chain();
+                #[cfg(not(target_os = "macos"))]
+                {
+                    self.upload_status_line =
+                        "Homebrew install is only offered on macOS.".to_string();
+                }
+            }
         }
     }
 }
@@ -694,6 +1078,11 @@ impl eframe::App for LainApp {
             return;
         }
 
+        self.poll_upload_job();
+        if self.upload_job_rx.is_some() {
+            ctx.request_repaint();
+        }
+
         let mut toolbar_action = ToolbarAction::None;
 
         if let AppPhase::Editor { workspace } = &self.phase {
@@ -706,14 +1095,68 @@ impl eframe::App for LainApp {
                         &workspace.root,
                         self.editor.is_dirty(),
                         self.show_sim,
+                        self.show_upload,
                         self.show_word_helper || self.show_cycle_helper,
                     );
                 });
+
+            let files = list_workspace_supported_files(&workspace.root);
+            let active = workspace.active_file.clone();
+            let mut pending_switch: Option<PathBuf> = None;
+            TopBottomPanel::top("workspace_files_bar")
+                .exact_height(32.0)
+                .show(ctx, |ui| {
+                    Frame::NONE
+                        .fill(Color32::from_rgb(4, 8, 4))
+                        .stroke(Stroke::new(1.0, START_GREEN_DIM))
+                        .inner_margin(Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            egui::ScrollArea::horizontal()
+                                .id_salt("workspace_files_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        for path in &files {
+                                            let is_active = active.as_ref() == Some(path);
+                                            let rel = path
+                                                .strip_prefix(&workspace.root)
+                                                .ok()
+                                                .unwrap_or(path.as_path());
+                                            let name = rel.display().to_string();
+                                            let resp = ui.add(
+                                                egui::Button::new(
+                                                    RichText::new(name)
+                                                        .monospace()
+                                                        .size(12.0)
+                                                        .color(if is_active { Color32::BLACK } else { START_GREEN }),
+                                                )
+                                                .fill(if is_active { START_GREEN } else { Color32::TRANSPARENT })
+                                                .stroke(Stroke::new(1.0, START_GREEN_DIM)),
+                                            );
+                                            if resp.clicked() {
+                                                pending_switch = Some(path.clone());
+                                            }
+                                        }
+                                    });
+                                });
+                        });
+                });
+
+            if let Some(path) = pending_switch {
+                match self.switch_active_file(path) {
+                    Ok(msg) => self.set_status(msg),
+                    Err(err) => self.set_error(err),
+                }
+            }
         }
 
-        // rhs_panel_editor_only: sim or helpers, mutually exclusive
+        // rhs_panel_editor_only: sim, helpers, or upload (mutually exclusive)
         let mut sim_action = SimAction::None;
-        let rhs_open = (self.show_sim || self.show_word_helper || self.show_cycle_helper)
+        let mut upload_action = UploadAction::None;
+        let rhs_open = (self.show_sim
+            || self.show_word_helper
+            || self.show_cycle_helper
+            || self.show_upload)
             && matches!(self.phase, AppPhase::Editor { .. });
 
         if rhs_open {
@@ -722,7 +1165,25 @@ impl eframe::App for LainApp {
                 .resizable(false)
                 .frame(egui::Frame::NONE)
                 .show(ctx, |ui| {
-                    if self.show_sim {
+                    if self.show_upload {
+                        let model = self
+                            .current_workspace()
+                            .map(|w| w.model)
+                            .unwrap_or(McuModel::Atmega328P);
+                        let ports = scan_serial_ports();
+                        upload_action = show_upload_panel(
+                            ui,
+                            FIRMWARE_HEX,
+                            self.firmware_hex_exists(),
+                            model.avrdude_part(),
+                            model.label(),
+                            &mut self.upload_programmer,
+                            &mut self.upload_port,
+                            &mut self.upload_port_custom,
+                            &ports,
+                            &self.upload_status_line,
+                        );
+                    } else if self.show_sim {
                         sim_action = show_sim_panel(
                             ui,
                             &self.sim,
@@ -836,11 +1297,26 @@ impl eframe::App for LainApp {
             self.handle_toolbar_action(toolbar_action);
         }
 
+        match upload_action {
+            UploadAction::None => {}
+            UploadAction::AssembleAndLink => match self.assemble_and_write_firmware_hex() {
+                Ok(()) => self.set_status(format!("Wrote {FIRMWARE_HEX} in project folder.")),
+                Err(e) => self.set_error(e),
+            },
+            UploadAction::UploadAvrdude => self.spawn_avrdude_upload(),
+        }
+
         match sim_action {
             SimAction::None => {}
             SimAction::Assemble => {
-                let source = self.editor.source().to_owned();
                 let model = self.current_workspace().map(|w| w.model).unwrap_or(McuModel::Atmega128A);
+                let source = match self.source_for_assembly() {
+                    Ok(src) => src,
+                    Err(err) => {
+                        self.set_error(err);
+                        return;
+                    }
+                };
                 match assemble_for_model(&source, model) {
                     Ok(words) => {
                         let n = words.len();
@@ -1055,4 +1531,125 @@ fn ensure_workspace_model_marker(root: &Path) -> Result<McuModel, String> {
 
     fs::write(&marker_328, "").map_err(|e| e.to_string())?;
     Ok(McuModel::Atmega328P)
+}
+
+fn list_workspace_supported_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if is_supported_text_file(&path) {
+                out.push(path);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    out
+}
+
+fn parse_include_target(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let rest = trimmed
+        .strip_prefix(".include")
+        .or_else(|| trimmed.strip_prefix(".INCLUDE"))
+        .or_else(|| trimmed.strip_prefix("#include"))?
+        .trim();
+    let start = rest.find('"')?;
+    let rest = &rest[start + 1..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+fn normalize_include_path(base_dir: &Path, include: &str) -> PathBuf {
+    let p = Path::new(include);
+    let joined = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base_dir.join(p)
+    };
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn expand_source_with_includes(
+    workspace: &Workspace,
+    active_path: &Path,
+    active_source: &str,
+) -> Result<String, String> {
+    let mut stack = Vec::<PathBuf>::new();
+    let mut expanded = String::new();
+    let active_norm = std::fs::canonicalize(active_path).unwrap_or_else(|_| active_path.to_path_buf());
+    expand_source_inner(
+        workspace,
+        &active_norm,
+        active_source,
+        Some((&active_norm, active_source)),
+        &mut stack,
+        &mut expanded,
+    )?;
+    Ok(expanded)
+}
+
+fn expand_source_inner(
+    workspace: &Workspace,
+    current_path: &Path,
+    source: &str,
+    active_override: Option<(&Path, &str)>,
+    stack: &mut Vec<PathBuf>,
+    out: &mut String,
+) -> Result<(), String> {
+    let current_norm = std::fs::canonicalize(current_path).unwrap_or_else(|_| current_path.to_path_buf());
+    if stack.contains(&current_norm) {
+        let cycle = stack
+            .iter()
+            .chain(std::iter::once(&current_norm))
+            .map(|p| p.strip_prefix(&workspace.root).unwrap_or(p).display().to_string())
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        return Err(format!("Include cycle detected: {cycle}"));
+    }
+    stack.push(current_norm.clone());
+
+    let mut included_once = HashSet::<PathBuf>::new();
+    for line in source.lines() {
+        if let Some(target) = parse_include_target(line) {
+            let base_dir = current_norm.parent().unwrap_or(&workspace.root);
+            let include_path = normalize_include_path(base_dir, target);
+            if !include_path.starts_with(&workspace.root) {
+                return Err(format!(
+                    "Include escapes workspace: {}",
+                    include_path.display()
+                ));
+            }
+            if !included_once.insert(include_path.clone()) {
+                continue;
+            }
+            let include_source = if let Some((active_path, src)) = active_override {
+                if include_path == active_path {
+                    src.to_string()
+                } else {
+                    read_text_file(&include_path)?
+                }
+            } else {
+                read_text_file(&include_path)?
+            };
+            expand_source_inner(
+                workspace,
+                &include_path,
+                &include_source,
+                active_override,
+                stack,
+                out,
+            )?;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    let _ = stack.pop();
+    Ok(())
 }

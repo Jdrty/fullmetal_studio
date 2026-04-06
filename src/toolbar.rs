@@ -20,6 +20,7 @@ pub enum ToolbarAction {
     OpenFolder,
     AddFileToProject,
     SimTogglePanel,
+    UploadTogglePanel,
     DocsInstructionSet,
     DocsFlashLocations,
     HelpersWordHelper,
@@ -54,6 +55,7 @@ pub fn show_toolbar(
     workspace_root:      &Path,
     is_dirty:            bool,
     sim_visible:     bool,
+    upload_visible:  bool,
     helpers_visible: bool,
 ) -> ToolbarAction {
     let mut action = ToolbarAction::None;
@@ -114,6 +116,19 @@ pub fn show_toolbar(
                     .clicked()
                 {
                     action = ToolbarAction::SimTogglePanel;
+                }
+
+                let upload_label = if upload_visible { "UPLOAD ▪" } else { "UPLOAD" };
+                if ui
+                    .add(eframe::egui::Button::new(
+                        RichText::new(upload_label)
+                            .font(title_font(18.0))
+                            .color(START_GREEN),
+                    )
+                    .frame(false))
+                    .clicked()
+                {
+                    action = ToolbarAction::UploadTogglePanel;
                 }
 
                 ui.menu_button(

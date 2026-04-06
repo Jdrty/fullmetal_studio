@@ -9,6 +9,7 @@ mod gui;
 mod sim_panel;
 mod syntax;
 mod toolbar;
+mod upload_panel;
 mod welcome;
 mod welcome_font;
 mod word_helper;
