@@ -14,6 +14,7 @@ use eframe::egui::{
 };
 
 use crate::boot_video::BootVideo;
+use crate::ed060sc4_display::Ed060sc4Display;
 use crate::avr::assembler::assemble_for_model;
 use crate::avr::cpu::StepResult;
 use crate::avr::intel_hex::{self, validate_intel_hex};
@@ -201,6 +202,7 @@ pub struct LainApp {
     xmem_state:  XmemState,
     /// ED060SC4 panel helper (ATmega128A only): max XMEM + purple PORTS highlights + EINK tab.
     ed060sc4_sim: bool,
+    ed060_display: Ed060sc4Display,
     /// Persisted; when true, `fake.mov` boot is skipped on next launch.
     skip_start_animation: bool,
     speed_limit: SpeedLimitState,
@@ -250,6 +252,7 @@ impl LainApp {
             stack_state: StackState::default(),
             xmem_state:  XmemState::default(),
             ed060sc4_sim: false,
+            ed060_display: Ed060sc4Display::default(),
             speed_limit: SpeedLimitState::default(),
             breakpoints: BreakpointState::default(),
             auto_running: false,
@@ -317,6 +320,20 @@ impl LainApp {
         });
     }
 
+    fn ed060_port_driven(&self) -> bool {
+        matches!(
+            &self.phase,
+            AppPhase::Editor { workspace }
+                if workspace.model == McuModel::Atmega128A && self.ed060sc4_sim
+        )
+    }
+
+    fn drive_ed060_from_cpu(&mut self) {
+        let on = self.ed060_port_driven();
+        let cpu = &self.sim;
+        self.ed060_display.drive_from_cpu(cpu, on);
+    }
+
     fn enter_editor(&mut self, workspace: Workspace) {
         let load_result = workspace
             .active_file
@@ -336,6 +353,7 @@ impl LainApp {
         }
         self.sim = Cpu::new_for_model(workspace.model);
         self.ed060sc4_sim = false;
+        self.ed060_display = Ed060sc4Display::default();
         self.phase = AppPhase::Editor { workspace };
         self.modal = ModalState::None;
     }
@@ -1214,6 +1232,7 @@ impl eframe::App for LainApp {
                             &mut self.stack_state,
                             &mut self.xmem_state,
                             self.ed060sc4_sim,
+                            &mut self.ed060_display.open,
                         );
                     } else if self.show_word_helper {
                         let files = self.collect_lain_files();
@@ -1341,6 +1360,7 @@ impl eframe::App for LainApp {
                         self.sim.reset();
                         self.sim.load_flash(&words);
                         self.sim_last_result = None;
+                        self.ed060_display.on_cpu_reset(&self.sim);
                         self.set_status(format!(
                             "Assembled {n} word{} → Flash.",
                             if n == 1 { "" } else { "s" }
@@ -1358,17 +1378,33 @@ impl eframe::App for LainApp {
             }
             SimAction::Step => {
                 self.sim_last_result = Some(self.sim.step());
+                self.drive_ed060_from_cpu();
             }
             SimAction::Run10 => {
-                let (_, r) = self.sim.step_n(10);
+                let on = self.ed060_port_driven();
+                let (_, r) = {
+                    let sim = &mut self.sim;
+                    let disp = &mut self.ed060_display;
+                    sim.step_n_hook(10, |cpu| {
+                        disp.drive_from_cpu(cpu, on);
+                    })
+                };
                 self.sim_last_result = Some(r);
             }
             SimAction::Run100 => {
-                let (_, r) = self.sim.step_n(100);
+                let on = self.ed060_port_driven();
+                let (_, r) = {
+                    let sim = &mut self.sim;
+                    let disp = &mut self.ed060_display;
+                    sim.step_n_hook(100, |cpu| {
+                        disp.drive_from_cpu(cpu, on);
+                    })
+                };
                 self.sim_last_result = Some(r);
             }
             SimAction::Reset => {
                 self.sim.reset();
+                self.ed060_display.on_cpu_reset(&self.sim);
                 self.sim_last_result = None;
                 self.auto_running = false;
                 self.ips = 0.0;
@@ -1388,6 +1424,7 @@ impl eframe::App for LainApp {
             }
             SimAction::SetIoBit { addr, mask } => {
                 self.sim.set_io_bit(addr, mask);
+                self.drive_ed060_from_cpu();
             }
             SimAction::SetXmem(size) => {
                 self.sim.configure_xmem(size);
@@ -1410,7 +1447,14 @@ impl eframe::App for LainApp {
                     // cap each burst to ~20 ms worth to keep the UI responsive
                     let burst_cap = ((limit * 0.020) as u64).max(1);
                     let batch = to_run.min(burst_cap);
-                    let r = self.sim.run_n_break(batch, &bp_addrs);
+                    let on = self.ed060_port_driven();
+                    let r = {
+                        let sim = &mut self.sim;
+                        let disp = &mut self.ed060_display;
+                        sim.run_n_break_hook(batch, &bp_addrs, |cpu| {
+                            disp.drive_from_cpu(cpu, on);
+                        })
+                    };
                     self.limit_steps_done += r.0;
                     r
                 } else {
@@ -1420,7 +1464,12 @@ impl eframe::App for LainApp {
                 }
             } else {
                 // unlimited: run for 12 ms
-                self.sim.run_timed_break(12, &bp_addrs)
+                let on = self.ed060_port_driven();
+                let sim = &mut self.sim;
+                let disp = &mut self.ed060_display;
+                sim.run_timed_break_hook(12, &bp_addrs, |cpu| {
+                    disp.drive_from_cpu(cpu, on);
+                })
             };
 
             // reset the bucket every 10 s to prevent u64 overflow / drift
@@ -1457,6 +1506,16 @@ impl eframe::App for LainApp {
         }
 
         // doc_overlays_z_last
+        let ed060_display_ok = matches!(
+            &self.phase,
+            AppPhase::Editor { workspace }
+                if workspace.model == McuModel::Atmega128A && self.ed060sc4_sim
+        );
+        self.ed060_display.close_if_unavailable(ed060_display_ok);
+        if ed060_display_ok {
+            self.ed060_display.show_window(ctx);
+        }
+
         show_isa_window(ctx, &mut self.show_isa);
         show_flash_locations_window(ctx, &mut self.show_flash_locations, &self.sim);
 

@@ -91,7 +91,7 @@ fn assemble_inner(
     for raw in source.lines() {
         let line = strip_comment(raw).trim();
         if let Some((name, val_raw)) = parse_equate_name(line) {
-            if let Ok(val) = sym(val_raw, &equates) {
+            if let Ok(val) = sym(val_raw, &equates, None) {
                 equates.insert(name, val);
             }
         }
@@ -195,7 +195,7 @@ fn parse_org(line: &str, equates: &HashMap<String, u32>) -> Option<u32> {
     let rest = line.trim()
         .strip_prefix(".org")
         .or_else(|| line.trim().strip_prefix(".ORG"))?;
-    sym(rest.trim(), equates).ok()
+    sym(rest.trim(), equates, None).ok()
 }
 
 /// builtin_equates like avr_io_h io_names→io_addr_0_3f in_out_sbi_cbi_ok bit_eq→0_7
@@ -203,6 +203,10 @@ fn builtin_equates(model: McuModel) -> HashMap<String, u32> {
     let mut m: HashMap<String, u32> = HashMap::new();
     // add closure lowercases keys
     let mut add = |k: &str, v: u32| { m.insert(k.to_lowercase(), v); };
+
+    for i in 0u32..32 {
+        add(&format!("r{i}"), i);
+    }
 
     // io_addrs_io_names (standard IO, 6-bit address for IN/OUT)
     for &(name, io_addr) in io_map::IO_NAMES {
@@ -673,7 +677,7 @@ fn encode(
     if m == ".BYTE" || m == ".DB" {
         let bytes: Vec<u8> = rest.split(',')
             .filter(|s| !s.trim().is_empty())
-            .map(|s| sym(s.trim(), equates).map(|v| v as u8))
+            .map(|s| sym(s.trim(), equates, Some(labels)).map(|v| v as u8))
             .collect::<Result<_, _>>()?;
         if bytes.is_empty() { return Ok(vec![0x0000]); }
         let mut out = Vec::new();
@@ -689,7 +693,7 @@ fn encode(
     if m == ".WORD" || m == ".SHORT" {
         let words: Vec<u16> = rest.split(',')
             .filter(|s| !s.trim().is_empty())
-            .map(|s| sym(s.trim(), equates).map(|v| v as u16))
+            .map(|s| sym(s.trim(), equates, Some(labels)).map(|v| v as u16))
             .collect::<Result<_, _>>()?;
         return if words.is_empty() { Ok(vec![0x0000]) } else { Ok(words) };
     }
@@ -724,18 +728,18 @@ fn encode(
         ("POP",  0x900F),
     ];
     if let Some(&(_, base)) = SING_REG.iter().find(|&&(n, _)| n == m.as_str()) {
-        let d = reg(rest)? as u16;
+        let d = reg(rest, equates)? as u16;
         return Ok(vec![base | ((d & 0x10) << 4) | ((d & 0x0F) << 4)]);
     }
 
     // reg_alias_expand
     match m.as_str() {
-        "TST" => { let d = reg(rest)? as u16; return Ok(vec![rr_op(0x2000, d, d)]); }
-        "CLR" => { let d = reg(rest)? as u16; return Ok(vec![rr_op(0x2400, d, d)]); }
-        "LSL" => { let d = reg(rest)? as u16; return Ok(vec![rr_op(0x0C00, d, d)]); }
-        "ROL" => { let d = reg(rest)? as u16; return Ok(vec![rr_op(0x1C00, d, d)]); }
+        "TST" => { let d = reg(rest, equates)? as u16; return Ok(vec![rr_op(0x2000, d, d)]); }
+        "CLR" => { let d = reg(rest, equates)? as u16; return Ok(vec![rr_op(0x2400, d, d)]); }
+        "LSL" => { let d = reg(rest, equates)? as u16; return Ok(vec![rr_op(0x0C00, d, d)]); }
+        "ROL" => { let d = reg(rest, equates)? as u16; return Ok(vec![rr_op(0x1C00, d, d)]); }
         "SER" => {
-            let d = reg(rest)?;
+            let d = reg(rest, equates)?;
             guard(d >= 16, &format!("SER: Rd must be R16–R31 (got R{d})"))?;
             let off = (d - 16) as u16;
             return Ok(vec![0xE000 | (0xF0 << 4) | (off << 4) | 0x0F]);
@@ -752,20 +756,20 @@ fn encode(
     ];
     if let Some(&(_, base)) = TWO_REG.iter().find(|&&(n, _)| n == m.as_str()) {
         let (ds, rs) = two_ops(rest)?;
-        return Ok(vec![rr_op(base, reg(ds)? as u16, reg(rs)? as u16)]);
+        return Ok(vec![rr_op(base, reg(ds, equates)? as u16, reg(rs, equates)? as u16)]);
     }
 
     // mul_family
     match m.as_str() {
         "MULS" => {
             let (ds, rs) = two_ops(rest)?;
-            let d = reg(ds)?; let r = reg(rs)?;
+            let d = reg(ds, equates)?; let r = reg(rs, equates)?;
             guard(d >= 16 && d <= 31 && r >= 16 && r <= 31, "MULS: needs R16–R31")?;
             return Ok(vec![0x0200 | (((d - 16) as u16) << 4) | ((r - 16) as u16)]);
         }
         "MULSU" | "FMUL" | "FMULS" | "FMULSU" => {
             let (ds, rs) = two_ops(rest)?;
-            let d = reg(ds)?; let r = reg(rs)?;
+            let d = reg(ds, equates)?; let r = reg(rs, equates)?;
             guard(d >= 16 && d <= 23 && r >= 16 && r <= 23,
                 &format!("{m}: needs R16–R23"))?;
             let base: u16 = match m.as_str() {
@@ -780,7 +784,7 @@ fn encode(
     // movw
     if m == "MOVW" {
         let (ds, rs) = two_ops(rest)?;
-        let d = reg(ds)?; let r = reg(rs)?;
+        let d = reg(ds, equates)?; let r = reg(rs, equates)?;
         guard(d % 2 == 0 && r % 2 == 0, "MOVW: registers must be even")?;
         return Ok(vec![0x0100 | (((d / 2) as u16) << 4) | ((r / 2) as u16)]);
     }
@@ -796,9 +800,9 @@ fn encode(
     for &(name, base) in IMM_OPS {
         if m != name { continue; }
         let (ds, ks) = two_ops(rest)?;
-        let d = reg(ds)?;
+        let d = reg(ds, equates)?;
         guard(d >= 16 && d <= 31, &format!("{m}: Rd must be R16–R31 (got R{d})"))?;
-        let mut k = imm_u8_sym(ks, equates)?;
+        let mut k = imm_u8_sym(ks, equates, labels)?;
         if m == "CBR" { k = !k; }
         let doff = (d - 16) as u16;
         let ku   = k as u16;
@@ -808,10 +812,10 @@ fn encode(
     // adiw_sbiw
     if m == "ADIW" || m == "SBIW" {
         let (ds, ks) = two_ops(rest)?;
-        let d = reg(ds)?;
+        let d = reg(ds, equates)?;
         let valid = [24u32, 26, 28, 30];
         guard(valid.contains(&d), &format!("{m}: Rd must be R24/R26/R28/R30"))?;
-        let k = sym(ks.trim(), equates)?;
+        let k = sym(ks.trim(), equates, Some(labels))?;
         guard(k <= 63, &format!("{m}: K={k} exceeds 63"))?;
         let dd  = ((d - 24) / 2) as u16;
         let ku  = k as u16;
@@ -822,27 +826,27 @@ fn encode(
     // lds_sts_2w
     if m == "LDS" {
         let (ds, ks) = two_ops(rest)?;
-        let d = reg(ds)? as u16;
-        let k = sym(ks.trim(), equates)? as u16;
+        let d = reg(ds, equates)? as u16;
+        let k = sym(ks.trim(), equates, Some(labels))? as u16;
         return Ok(vec![0x9000 | ((d & 0x10) << 4) | ((d & 0x0F) << 4), k]);
     }
     if m == "STS" {
         let (ks, rs) = two_ops(rest)?;
-        let r = reg(rs)? as u16;
-        let k = sym(ks.trim(), equates)? as u16;
+        let r = reg(rs, equates)? as u16;
+        let k = sym(ks.trim(), equates, Some(labels))? as u16;
         return Ok(vec![0x9200 | ((r & 0x10) << 4) | ((r & 0x0F) << 4), k]);
     }
 
     // ld_st_ptr
     if m == "LD" || m == "LDD" {
         let (ds, ptrs) = two_ops(rest)?;
-        let d = reg(ds)? as u16;
+        let d = reg(ds, equates)? as u16;
         let ptr = parse_ptr(ptrs)?;
         return Ok(vec![encode_ld(d, ptr)?]);
     }
     if m == "ST" || m == "STD" {
         let (ptrs, rs) = two_ops(rest)?;
-        let r = reg(rs)? as u16;
+        let r = reg(rs, equates)? as u16;
         let ptr = parse_ptr(ptrs)?;
         return Ok(vec![encode_st(r, ptr)?]);
     }
@@ -851,7 +855,7 @@ fn encode(
     if m == "LPM" {
         if rest.is_empty() { return Ok(vec![0x95C8]); }
         let (ds, ptrs) = two_ops(rest)?;
-        let d = reg(ds)? as u16;
+        let d = reg(ds, equates)? as u16;
         let base: u16 = match ptrs.trim().to_uppercase().as_str() {
             "Z"  => 0x9004,
             "Z+" => 0x9005,
@@ -862,7 +866,7 @@ fn encode(
     if m == "ELPM" {
         if rest.is_empty() { return Ok(vec![0x95D8]); }
         let (ds, ptrs) = two_ops(rest)?;
-        let d = reg(ds)? as u16;
+        let d = reg(ds, equates)? as u16;
         let base: u16 = match ptrs.trim().to_uppercase().as_str() {
             "Z"  => 0x9006,
             "Z+" => 0x9007,
@@ -879,14 +883,14 @@ fn encode(
     // in_out
     if m == "IN" {
         let (ds, as_) = two_ops(rest)?;
-        let d = reg(ds)? as u16;
+        let d = reg(ds, equates)? as u16;
         let a = io_addr_sym(as_, equates)? as u16;
         guard(a <= 0x3F, &format!("IN: I/O addr 0x{a:02X} > 0x3F (use LDS instead)"))?;
         return Ok(vec![0xB000 | ((a & 0x30) << 5) | ((d & 0x10) << 4) | ((d & 0x0F) << 4) | (a & 0x0F)]);
     }
     if m == "OUT" {
         let (as_, rs) = two_ops(rest)?;
-        let r = reg(rs)? as u16;
+        let r = reg(rs, equates)? as u16;
         let a = io_addr_sym(as_, equates)? as u16;
         guard(a <= 0x3F, &format!("OUT: I/O addr 0x{a:02X} > 0x3F (use STS instead)"))?;
         return Ok(vec![0xB800 | ((a & 0x30) << 5) | ((r & 0x10) << 4) | ((r & 0x0F) << 4) | (a & 0x0F)]);
@@ -903,14 +907,14 @@ fn encode(
         let a = io_addr_sym(as_, equates)?;
         guard(a <= 31, &format!("{m}: I/O address 0x{a:02X} is out of range \
             (SBI/CBI/SBIC/SBIS only reach I/O 0x00–0x1F; use SBRS/SBRC + IN for higher registers)"))?;
-        let b = sym(bs.trim(), equates)?;
+        let b = sym(bs.trim(), equates, Some(labels))?;
         guard(b <= 7, &format!("{m}: bit {b} > 7"))?;
         return Ok(vec![base | ((a as u16) << 3) | (b as u16)]);
     }
 
     // bset_bclr
     if m == "BSET" || m == "BCLR" {
-        let s = sym(rest.trim(), equates)?;
+        let s = sym(rest.trim(), equates, Some(labels))?;
         guard(s <= 7, &format!("{m}: bit {s} > 7"))?;
         let base: u16 = if m == "BSET" { 0x9408 } else { 0x9488 };
         return Ok(vec![base | ((s as u16) << 4)]);
@@ -919,15 +923,15 @@ fn encode(
     // bst_bld
     if m == "BST" {
         let (rs, bs) = two_ops(rest)?;
-        let r = reg(rs)? as u16;
-        let b = sym(bs.trim(), equates)?;
+        let r = reg(rs, equates)? as u16;
+        let b = sym(bs.trim(), equates, Some(labels))?;
         guard(b <= 7, "BST: bit > 7")?;
         return Ok(vec![0xFA00 | ((r & 0x10) << 4) | ((r & 0x0F) << 4) | (b as u16)]);
     }
     if m == "BLD" {
         let (ds, bs) = two_ops(rest)?;
-        let d = reg(ds)? as u16;
-        let b = sym(bs.trim(), equates)?;
+        let d = reg(ds, equates)? as u16;
+        let b = sym(bs.trim(), equates, Some(labels))?;
         guard(b <= 7, "BLD: bit > 7")?;
         return Ok(vec![0xF800 | ((d & 0x10) << 4) | ((d & 0x0F) << 4) | (b as u16)]);
     }
@@ -935,8 +939,8 @@ fn encode(
     // sbrc_sbrs
     if m == "SBRC" || m == "SBRS" {
         let (rs, bs) = two_ops(rest)?;
-        let r = reg(rs)? as u16;
-        let b = sym(bs.trim(), equates)?;
+        let r = reg(rs, equates)? as u16;
+        let b = sym(bs.trim(), equates, Some(labels))?;
         guard(b <= 7, &format!("{m}: bit > 7"))?;
         let base: u16 = if m == "SBRC" { 0xFC00 } else { 0xFE00 };
         return Ok(vec![base | ((r & 0x10) << 4) | ((r & 0x0F) << 4) | (b as u16)]);
@@ -982,7 +986,7 @@ fn encode(
             ("0", rest)
         };
         let s_val: u16 = if fixed_s == 255 {
-            let sv = sym(s_str.trim(), equates)?;
+            let sv = sym(s_str.trim(), equates, Some(labels))?;
             guard(sv <= 7, &format!("{m}: SREG bit {sv} > 7"))?;
             sv as u16
         } else {
@@ -995,7 +999,7 @@ fn encode(
 
     // des_k
     if m == "DES" {
-        let k = sym(rest.trim(), equates)?;
+        let k = sym(rest.trim(), equates, Some(labels))?;
         guard(k <= 15, "DES: K must be 0–15")?;
         return Ok(vec![0x940B | ((k as u16) << 4)]);
     }
@@ -1006,7 +1010,7 @@ fn encode(
     ];
     if let Some(&(_, base)) = AVXM.iter().find(|&&(n, _)| n == m.as_str()) {
         let (_, rs) = two_ops(rest)?;
-        let r = reg(rs)? as u16;
+        let r = reg(rs, equates)? as u16;
         return Ok(vec![base | ((r & 0x10) << 4) | ((r & 0x0F) << 4)]);
     }
 
@@ -1091,7 +1095,6 @@ fn std_z(r: u16, q: u16) -> u16 {
 fn std_y(r: u16, q: u16) -> u16 { std_z(r, q) | 0x0008 }
 
 // operand_parsers
-
 fn no_ops(rest: &str) -> Result<(), String> {
     if !rest.trim().is_empty() { Err(format!("Unexpected operand: '{rest}'")) } else { Ok(()) }
 }
@@ -1107,7 +1110,7 @@ fn guard(cond: bool, msg: &str) -> Result<(), String> {
     if cond { Ok(()) } else { Err(msg.to_string()) }
 }
 
-fn reg(s: &str) -> Result<u32, String> {
+fn reg(s: &str, equates: &HashMap<String, u32>) -> Result<u32, String> {
     let u = s.trim().to_uppercase();
     // named aliases (avr-libc / GAS convention)
     match u.as_str() {
@@ -1116,14 +1119,30 @@ fn reg(s: &str) -> Result<u32, String> {
         "ZL" => return Ok(30), "ZH" => return Ok(31),
         _ => {}
     }
-    let digits = u.strip_prefix('R').ok_or_else(|| format!("Expected register, got '{s}'"))?;
-    let n: u32 = digits.parse().map_err(|_| format!("Invalid register '{s}'"))?;
-    guard(n <= 31, &format!("R{n} out of range"))?;
-    Ok(n)
+    if let Some(digits) = u.strip_prefix('R') {
+        if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+            let n: u32 = digits.parse().map_err(|_| format!("Invalid register '{s}'"))?;
+            guard(n <= 31, &format!("R{n} out of range"))?;
+            return Ok(n);
+        }
+    }
+    // `.def rowl = r17` etc.: symbol must evaluate to a register number 0–31
+    let v = sym(s.trim(), equates, None)?;
+    guard(
+        v <= 31,
+        &format!(
+            "Register operand '{s}' resolves to {v} (expected 0–31; use R0–R31 or .def name = rN)"
+        ),
+    )?;
+    Ok(v)
 }
 
-fn imm_u8_sym(s: &str, equates: &HashMap<String, u32>) -> Result<u8, String> {
-    let v = sym(s.trim(), equates)?;
+fn imm_u8_sym(
+    s: &str,
+    equates: &HashMap<String, u32>,
+    labels: &HashMap<String, u32>,
+) -> Result<u8, String> {
+    let v = sym(s.trim(), equates, Some(labels))?;
     guard(v <= 255, &format!("Immediate {v} > 255"))?;
     Ok(v as u8)
 }
@@ -1202,51 +1221,81 @@ fn tokenize_expr(s: &str) -> Result<Vec<ExprTok>, String> {
     Ok(out)
 }
 
-fn expr_or(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
-    let mut v = expr_xor(t, p, eq)?;
-    while matches!(t.get(*p), Some(ExprTok::Op('|'))) { *p += 1; v |= expr_xor(t, p, eq)?; }
+fn expr_or(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
+    let mut v = expr_xor(t, p, eq, labels)?;
+    while matches!(t.get(*p), Some(ExprTok::Op('|'))) { *p += 1; v |= expr_xor(t, p, eq, labels)?; }
     Ok(v)
 }
-fn expr_xor(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
-    let mut v = expr_and(t, p, eq)?;
-    while matches!(t.get(*p), Some(ExprTok::Op('^'))) { *p += 1; v ^= expr_and(t, p, eq)?; }
+fn expr_xor(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
+    let mut v = expr_and(t, p, eq, labels)?;
+    while matches!(t.get(*p), Some(ExprTok::Op('^'))) { *p += 1; v ^= expr_and(t, p, eq, labels)?; }
     Ok(v)
 }
-fn expr_and(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
-    let mut v = expr_shift(t, p, eq)?;
-    while matches!(t.get(*p), Some(ExprTok::Op('&'))) { *p += 1; v &= expr_shift(t, p, eq)?; }
+fn expr_and(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
+    let mut v = expr_shift(t, p, eq, labels)?;
+    while matches!(t.get(*p), Some(ExprTok::Op('&'))) { *p += 1; v &= expr_shift(t, p, eq, labels)?; }
     Ok(v)
 }
-fn expr_shift(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
-    let mut v = expr_add(t, p, eq)?;
+fn expr_shift(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
+    let mut v = expr_add(t, p, eq, labels)?;
     loop {
         match t.get(*p) {
-            Some(ExprTok::Shl) => { *p += 1; v = v.wrapping_shl(expr_add(t, p, eq)?); }
-            Some(ExprTok::Shr) => { *p += 1; v = v.wrapping_shr(expr_add(t, p, eq)?); }
+            Some(ExprTok::Shl) => { *p += 1; v = v.wrapping_shl(expr_add(t, p, eq, labels)?); }
+            Some(ExprTok::Shr) => { *p += 1; v = v.wrapping_shr(expr_add(t, p, eq, labels)?); }
             _ => break,
         }
     }
     Ok(v)
 }
-fn expr_add(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
-    let mut v = expr_mul(t, p, eq)?;
+fn expr_add(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
+    let mut v = expr_mul(t, p, eq, labels)?;
     loop {
         match t.get(*p) {
-            Some(ExprTok::Op('+')) => { *p += 1; v = v.wrapping_add(expr_mul(t, p, eq)?); }
-            Some(ExprTok::Op('-')) => { *p += 1; v = v.wrapping_sub(expr_mul(t, p, eq)?); }
+            Some(ExprTok::Op('+')) => { *p += 1; v = v.wrapping_add(expr_mul(t, p, eq, labels)?); }
+            Some(ExprTok::Op('-')) => { *p += 1; v = v.wrapping_sub(expr_mul(t, p, eq, labels)?); }
             _ => break,
         }
     }
     Ok(v)
 }
-fn expr_mul(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
-    let mut v = expr_unary(t, p, eq)?;
+fn expr_mul(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
+    let mut v = expr_unary(t, p, eq, labels)?;
     loop {
         match t.get(*p) {
-            Some(ExprTok::Op('*')) => { *p += 1; v = v.wrapping_mul(expr_unary(t, p, eq)?); }
+            Some(ExprTok::Op('*')) => { *p += 1; v = v.wrapping_mul(expr_unary(t, p, eq, labels)?); }
             Some(ExprTok::Op('/')) => {
                 *p += 1;
-                let d = expr_unary(t, p, eq)?;
+                let d = expr_unary(t, p, eq, labels)?;
                 if d == 0 { return Err("division by zero".to_string()); }
                 v /= d;
             }
@@ -1255,19 +1304,29 @@ fn expr_mul(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u
     }
     Ok(v)
 }
-fn expr_unary(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
+fn expr_unary(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
     match t.get(*p) {
-        Some(ExprTok::Op('-')) => { *p += 1; expr_unary(t, p, eq).map(|v| 0u32.wrapping_sub(v)) }
-        Some(ExprTok::Op('~')) => { *p += 1; expr_unary(t, p, eq).map(|v| !v) }
-        _ => expr_atom(t, p, eq),
+        Some(ExprTok::Op('-')) => { *p += 1; expr_unary(t, p, eq, labels).map(|v| 0u32.wrapping_sub(v)) }
+        Some(ExprTok::Op('~')) => { *p += 1; expr_unary(t, p, eq, labels).map(|v| !v) }
+        _ => expr_atom(t, p, eq, labels),
     }
 }
-fn expr_atom(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<u32, String> {
+fn expr_atom(
+    t: &[ExprTok],
+    p: &mut usize,
+    eq: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
     match t.get(*p).cloned() {
         Some(ExprTok::Num(n)) => { *p += 1; Ok(n) }
         Some(ExprTok::LParen) => {
             *p += 1;
-            let v = expr_or(t, p, eq)?;
+            let v = expr_or(t, p, eq, labels)?;
             if matches!(t.get(*p), Some(ExprTok::RParen)) { *p += 1; Ok(v) }
             else { Err("missing ')' in expression".to_string()) }
         }
@@ -1276,7 +1335,7 @@ fn expr_atom(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<
             // function call: id '(' expr ')'
             if matches!(t.get(*p), Some(ExprTok::LParen)) {
                 *p += 1;
-                let inner = expr_or(t, p, eq)?;
+                let inner = expr_or(t, p, eq, labels)?;
                 if matches!(t.get(*p), Some(ExprTok::RParen)) { *p += 1; }
                 else { return Err(format!("missing ')' after {}()", name)); }
                 return match name.to_lowercase().as_str() {
@@ -1293,26 +1352,36 @@ fn expr_atom(t: &[ExprTok], p: &mut usize, eq: &HashMap<String, u32>) -> Result<
                     _ => Err(format!("unknown function '{}'", name)),
                 };
             }
-            // plain identifier – look up in equates
+            // plain identifier – .equ first, then code label → byte address (word index × 2) for flash tables
             let key = name.to_lowercase();
-            eq.get(key.as_str())
-                .copied()
-                .ok_or_else(|| format!("undefined symbol '{}'", name))
+            if let Some(&v) = eq.get(key.as_str()) {
+                return Ok(v);
+            }
+            if let Some(lm) = labels {
+                if let Some(&w) = lm.get(key.as_str()) {
+                    return Ok(w.wrapping_mul(2));
+                }
+            }
+            Err(format!("undefined symbol '{}'", name))
         }
         other => Err(format!("unexpected token {:?} in expression", other)),
     }
 }
 
 /// evaluate a symbol/expression string: literals, identifiers, operators, function calls.
-fn sym(s: &str, equates: &HashMap<String, u32>) -> Result<u32, String> {
+fn sym(
+    s: &str,
+    equates: &HashMap<String, u32>,
+    labels: Option<&HashMap<String, u32>>,
+) -> Result<u32, String> {
     let s = s.trim();
     let toks = tokenize_expr(s)
         .map_err(|e| format!("Invalid integer '{s}': {e}"))?;
     let mut pos = 0;
-    let v = expr_or(&toks, &mut pos, equates)
-        .map_err(|_| format!("Invalid integer '{s}'"))?;
+    let v = expr_or(&toks, &mut pos, equates, labels)
+        .map_err(|e| format!("Invalid integer '{s}': {e}"))?;
     if pos < toks.len() {
-        return Err(format!("Invalid integer '{s}'"));
+        return Err(format!("Invalid integer '{s}': trailing garbage in expression"));
     }
     Ok(v)
 }
@@ -1362,7 +1431,7 @@ fn branch_offset(
         return Ok(target as i32 - (cur as i32 + 1));
     }
     // branch_sym_as_offset_ok
-    sym(s.trim(), equates).map(|v| v as i32)
+    sym(s.trim(), equates, Some(labels)).map(|v| v as i32)
 }
 
 fn resolve_addr(
@@ -1374,7 +1443,7 @@ fn resolve_addr(
     if let Some(&target) = labels.get(&key) {
         return Ok(target);
     }
-    sym(s.trim(), equates)
+    sym(s.trim(), equates, Some(labels))
 }
 
 fn rr_op(base: u16, d: u16, r: u16) -> u16 {
@@ -1444,6 +1513,40 @@ mod tests {
         assert_eq!(words.len(), 1);
         // ldi_enc r16_k42 → e20a
         assert_eq!(words[0], 0xE20A);
+    }
+
+    #[test]
+    fn asm_def_register_alias() {
+        let src = ".def temp = r16\n.def rowL = r17\n\
+                   LDI temp, 0\n\
+                   LDI rowL, 0xFF\n\
+                   MOV rowL, temp";
+        let words = assemble(src).unwrap();
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0], 0xE000); // ldi r16, 0
+        assert_eq!(words[1], 0xEF1F); // ldi r17, 0xFF
+        assert_eq!(words[2], 0x2F10); // mov r17, r16
+    }
+
+    #[test]
+    fn asm_hi8_lo8_shift_equ() {
+        let src = ".equ PULSAR_DATA = 0x1234\n\
+                   .db hi8(PULSAR_DATA<<1), lo8(PULSAR_DATA<<1)";
+        let words = assemble(src).unwrap();
+        assert_eq!(words.len(), 1);
+        // 0x1234<<1 = 0x2468 → hi8=0x24, lo8=0x68 → word 0x6824
+        assert_eq!(words[0], 0x6824);
+    }
+
+    #[test]
+    fn asm_hi8_lo8_shift_label() {
+        let src = "NOP\n\
+                   pulsar:\n\
+                   .db hi8(pulsar<<1), lo8(pulsar<<1)";
+        let words = assemble(src).unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0], 0x0000);
+        assert_eq!(words[1], 0x0400);
     }
 
     #[test]

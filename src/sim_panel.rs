@@ -226,6 +226,7 @@ pub fn show_sim_panel(
     stack_state:   &mut StackState,
     xmem_state:    &mut XmemState,
     ed060sc4:      bool,
+    ed060_display_open: &mut bool,
 ) -> SimAction {
     let mut action = SimAction::None;
 
@@ -302,7 +303,7 @@ pub fn show_sim_panel(
                         SimTab::Flash  => { show_flash_tab(ui, cpu, flash_state); SimAction::None }
                         SimTab::Break  => { show_break_tab(ui, bp_state);       SimAction::None }
                         SimTab::Stack  => show_stack_tab(ui, cpu, stack_state),
-                        SimTab::Eink   => { show_eink_tab(ui);                  SimAction::None }
+                        SimTab::Eink   => { show_eink_tab(ui, ed060_display_open); SimAction::None }
                     }
                 }).inner;
             if action == SimAction::None { action = tab_action; }
@@ -490,64 +491,124 @@ fn ed060_gpio_pin(port: &str, bit: u8) -> bool {
     }
 }
 
-fn show_eink_tab(ui: &mut Ui) {
-    ui.label(
-        RichText::new("ED060SC4  (800×600)")
-            .strong()
-            .monospace()
-            .size(14.0)
-            .color(EINK_PURPLE),
-    );
+fn show_eink_tab(ui: &mut Ui, display_open: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("ED060SC4  (800×600)")
+                .strong()
+                .monospace()
+                .size(14.0)
+                .color(EINK_PURPLE),
+        );
+        ui.add_space((ui.available_width() - 118.0).max(0.0));
+        let btn = ui.add(
+            Button::new(
+                RichText::new("Open display")
+                    .monospace()
+                    .size(11.5)
+                    .color(EINK_PURPLE),
+            )
+            .fill(Color32::from_rgb(18, 8, 28))
+            .stroke(Stroke::new(1.0, EINK_PURPLE_DIM)),
+        );
+        if btn.clicked() {
+            *display_open = true;
+        }
+    });
     ui.add_space(8.0);
-    eink_section_heading(ui, "FULL PANEL (VERTICAL)");
+    eink_section_heading(ui, "VERTICAL INIT (BEFORE PIXEL DATA)");
     ui.add_space(4.0);
     eink_pin_explain_line(
         ui,
-        "PE3 SPV",
-        " — pulse → new frame; row pointer to top row",
+        "PE5 GMODE",
+        " — high enables row (TFT) gate drivers; low after a frame / before next (reduces ghosting)",
+    );
+    ui.add_space(2.0);
+    eink_pin_explain_line(ui, "PE3 SPV", " — low prepares the start pulse; high again after the sync CKV");
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "PE4 CKV",
+        " — one pulse (↓ while SPV low) syncs vertical pointer to row 0; later ↓ advances row",
+    );
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new(
+            "Order: GMODE↑ → SPV↓ → CKV pulse → SPV↑. Simulator: CKV↓ with SPV low resets row to 0",
+        )
+        .monospace()
+        .size(10.5)
+        .color(START_GREEN_DIM),
+    );
+    eink_section_gap(ui);
+    eink_section_heading(ui, "ONE ROW (800 PX = 200 BYTES ON PD)");
+    ui.add_space(4.0);
+    eink_pin_explain_line(
+        ui,
+        "PB0 SPH",
+        " — low starts horizontal scan; high ends it. CL clocks are ignored while SPH is high",
+    );
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "PD0–PD7",
+        " — each byte = 4 pixels @ 2 bpp: 00 hold, 01 black, 10 white, 11 unused (hold)",
+    );
+    ui.add_space(2.0);
+    eink_pin_explain_line(ui, "PB6 CL", " — rising edge samples PD into the shift chain (200× per row)");
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "PB5 LE",
+        " — pulse high→low; falling edge copies the shift register to the column drivers",
+    );
+    ui.add_space(2.0);
+    eink_pin_explain_line(
+        ui,
+        "PE2 OE",
+        " — high applies waveform to microcapsules; falling edge commits latched row to the sim FB",
     );
     ui.add_space(2.0);
     eink_pin_explain_line(
         ui,
         "PE4 CKV",
-        " — pulse low→high→low; advance active row down one (600 rows / frame)",
+        " — after OE↓: CKV↓ with SPV high advances the active row (0…599)",
     );
     eink_section_gap(ui);
-    eink_section_heading(ui, "ONE ROW (800 PIXELS ON PD BUS)");
+    eink_section_heading(ui, "POWER & WAVEFORM");
     ui.add_space(4.0);
-    eink_pin_explain_line(ui, "PB0 SPH", " — low; open row for shifting data in");
-    ui.add_space(2.0);
     eink_pin_explain_line(
         ui,
-        "PD0–PD7",
-        " — pixel data: 2 bits / pixel → 00 hold, 01 black, 10 white, 11 unused",
+        "PB7",
+        " — panel 3.3 V rail enable (power); simulator ignores pixel updates unless GMODE and PB7 are high",
     );
     ui.add_space(2.0);
-    eink_pin_explain_line(ui, "PB6 CL", " — pulse; clock PD7:0 into row memory");
-    ui.add_space(2.0);
-    eink_pin_explain_line(ui, "PB5 LE", " — latch; hold row data on column drivers");
-    ui.add_space(2.0);
-    eink_pin_explain_line(ui, "PE2 OE", " — fills / updates physical e-ink from latched data");
-    eink_section_gap(ui);
-    eink_section_heading(ui, "POWER & GATES");
+    ui.label(
+        RichText::new(
+            "You should try to send full black then full white before anything else, einks are weird ¯\_(ツ)_/¯",
+        )
+        .monospace()
+        .size(10.5)
+        .color(START_GREEN_DIM),
+    );
     ui.add_space(4.0);
-    eink_pin_explain_line(ui, "PB7", " — e-ink panel power");
-    ui.add_space(2.0);
-    eink_pin_explain_line(
-        ui,
-        "GMODE",
-        " — TFT row gate enable; off after each full frame, on before the next (limits ghosting)",
+    ui.label(
+        RichText::new(
+            "Power-down: GMODE low when idle. Firmware timing (e.g. ~20 µs after OE↑) is not modele, only pin edges and order matter",
+        )
+        .monospace()
+        .size(10.5)
+        .color(START_GREEN_DIM),
     );
     eink_section_gap(ui);
     ui.separator();
     ui.add_space(4.0);
-    eink_section_heading(ui, "SEQUENCE (SUMMARY)");
+    eink_section_heading(ui, "ROW LOOP (×600)");
     ui.add_space(4.0);
     for s in [
-        "1) Pulse SPV — start at row 0",
-        "2) Per row: SPH low → shift 800 pixels with CL + PD → LE latch → release SPH as needed",
-        "3) Pulse CKV — move to next row",
-        "4) Repeat steps 2–3 for 600 rows",
+        "1) SPH↓ (reset byte index) → 200× (PD byte, CL↑) → SPH↑",
+        "2) LE pulse → latch row",
+        "3) CKV↑ → OE↑ → (waveform delay in hardware) → OE↓ → CKV↓ → next row",
     ] {
         ui.label(
             RichText::new(s)
@@ -701,10 +762,12 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, ed060_on: bool) {
     if ed060_on {
         ui.add_space(2.0);
         ui.label(
-            RichText::new("  purple \u{2588} / \u{2504} / dot — ED060SC4 (PB0,5,6,7  PD  PE2–7)")
-                .monospace()
-                .size(11.0)
-                .color(EINK_PURPLE),
+            RichText::new(
+                "  purple \u{2588} / \u{2504} / dot — ED060SC4 (PB0 SPH,5 LE,6 CL,7 3.3V  PD  PE2 OE,3 SPV,4 CKV,5 GMODE…PE7)",
+            )
+            .monospace()
+            .size(10.5)
+            .color(EINK_PURPLE),
         );
     }
 }

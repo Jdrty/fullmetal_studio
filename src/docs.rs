@@ -1,5 +1,4 @@
 //! isa_ref_overlay show_isa_window_each_frame ~88pct_viewport
-
 use eframe::egui::{
     self, Align, Button, Color32, Frame, Grid, Layout, Margin, RichText, ScrollArea, Stroke, Ui,
 };
@@ -10,9 +9,6 @@ const AMBER:   Color32 = Color32::from_rgb(255, 185, 55);
 const DIM:     Color32 = Color32::from_rgb(65,  65,  65);
 const SEC_COL: Color32 = Color32::from_rgb(100, 220, 100);
 
-// flash_locations_window
-
-/// Overlay showing the IVT layout and code regions currently loaded in flash.
 pub fn show_flash_locations_window(ctx: &egui::Context, open: &mut bool, cpu: &Cpu) {
     if !*open { return; }
     let screen = ctx.screen_rect();

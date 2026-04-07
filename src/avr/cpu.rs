@@ -351,7 +351,13 @@ impl Cpu {
     }
 
     /// step_n times → (steps_run, last_result)
+    #[allow(dead_code)] // `cfg(test)` in this file; narrow API for callers without hooks
     pub fn step_n(&mut self, n: u32) -> (u32, StepResult) {
+        self.step_n_hook(n, |_| {})
+    }
+
+    /// Like [`Self::step_n`], but invokes `hook` after each successfully decoded instruction.
+    pub fn step_n_hook<F: FnMut(&Cpu)>(&mut self, n: u32, mut hook: F) -> (u32, StepResult) {
         let mut ran = 0u32;
         while ran < n {
             if self.pc as usize >= self.flash_words() {
@@ -362,6 +368,7 @@ impl Cpu {
             self.pc += 1;
             ran += 1;
             let r = self.decode_execute(op);
+            hook(self);
             if r != StepResult::Ok { return (ran, r); }
         }
         (ran, StepResult::Ok)
@@ -374,7 +381,7 @@ impl Cpu {
         let t0     = std::time::Instant::now();
         let mut total = 0u64;
         loop {
-            let (n, r) = self.step_n(100_000);
+            let (n, r) = self.step_n_hook(100_000, |_| {});
             self.tick_timers(); // timers_each_100k_batch
             total += n as u64;
             if r != StepResult::Ok { return (total, r); }
@@ -384,10 +391,20 @@ impl Cpu {
 
     /// like run_timed but stops early when PC hits a breakpoint address.
     /// returns (steps, result, breakpoint_hit_addr).
+    #[allow(dead_code)] // wrapper over [`Self::run_timed_break_hook`]
     pub fn run_timed_break(
         &mut self,
         millis: u64,
         breakpoints: &[u16],
+    ) -> (u64, StepResult, Option<u16>) {
+        self.run_timed_break_hook(millis, breakpoints, |_| {})
+    }
+
+    pub fn run_timed_break_hook<F: FnMut(&Cpu)>(
+        &mut self,
+        millis: u64,
+        breakpoints: &[u16],
+        mut hook: F,
     ) -> (u64, StepResult, Option<u16>) {
         let budget = std::time::Duration::from_millis(millis);
         let t0     = std::time::Instant::now();
@@ -396,7 +413,7 @@ impl Cpu {
         if breakpoints.is_empty() {
             // fast path: no breakpoints — use the same 100k batch loop as run_timed
             loop {
-                let (n, r) = self.step_n(100_000);
+                let (n, r) = self.step_n_hook(100_000, |cpu| hook(cpu));
                 self.tick_timers();
                 total += n as u64;
                 if r != StepResult::Ok { return (total, r, None); }
@@ -410,6 +427,7 @@ impl Cpu {
                     return (total, StepResult::Ok, Some(pc16));
                 }
                 let r = self.step();
+                hook(self);
                 total += 1;
                 if r != StepResult::Ok { return (total, r, None); }
                 if total % 10_000 == 0 {
@@ -421,10 +439,20 @@ impl Cpu {
     }
 
     /// run exactly `steps` instructions per frame (for IPS-limited auto mode).
+    #[allow(dead_code)] // wrapper over [`Self::run_n_break_hook`]
     pub fn run_n_break(
         &mut self,
         steps: u64,
         breakpoints: &[u16],
+    ) -> (u64, StepResult, Option<u16>) {
+        self.run_n_break_hook(steps, breakpoints, |_| {})
+    }
+
+    pub fn run_n_break_hook<F: FnMut(&Cpu)>(
+        &mut self,
+        steps: u64,
+        breakpoints: &[u16],
+        mut hook: F,
     ) -> (u64, StepResult, Option<u16>) {
         let mut done = 0u64;
         while done < steps {
@@ -433,6 +461,7 @@ impl Cpu {
                 return (done, StepResult::Ok, Some(pc16));
             }
             let r = self.step();
+            hook(self);
             done += 1;
             if r != StepResult::Ok { return (done, r, None); }
         }

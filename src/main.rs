@@ -4,6 +4,8 @@ mod avr;
 mod boot_video;
 mod cycle_helper;
 mod docs;
+mod ed060sc4_display;
+mod ed060sc4_sim;
 mod editor;
 mod gui;
 mod sim_panel;
