@@ -585,7 +585,7 @@ fn show_eink_tab(ui: &mut Ui, display_open: &mut bool) {
     ui.add_space(2.0);
     ui.label(
         RichText::new(
-            "You should try to send full black then full white before anything else, einks are weird ¯\_(ツ)_/¯",
+            "You should try to send full black then full white before anything else, einks are weird :shrug:",
         )
         .monospace()
         .size(10.5)
