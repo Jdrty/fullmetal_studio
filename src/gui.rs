@@ -32,7 +32,10 @@ use crate::sim_panel::{
     SpeedLimitState, StackState, XmemState,
 };
 use crate::toolbar::{show_toolbar, ToolbarAction};
-use crate::uart_panel::{append_uart_tx_to_scrollback, show_uart_panel, UartPanelState};
+use crate::uart_panel::{
+    append_uart_tx_to_scrollback, poll_hardware_serial, refresh_uart_display_throttle,
+    show_uart_panel, UartBackend, UartPanelState,
+};
 use crate::upload_panel::{scan_serial_ports, show_upload_panel, UploadAction};
 use crate::word_helper::{show_word_helper, WordHelperState};
 use crate::modal_chrome::{
@@ -44,8 +47,8 @@ use crate::waveforms::{
     on_waveforms_panel_hidden, show_waveforms_panel, WaveformAction, WaveformState,
 };
 use crate::theme::{START_GREEN, START_GREEN_DIM};
+use serialport::SerialPort;
 
-/// Written by “Assemble and Link”; consumed by avrdude.
 const FIRMWARE_HEX: &str = "firmware.hex";
 
 pub fn setup_style(ctx: &egui::Context) {
@@ -215,7 +218,7 @@ pub struct FullMetalApp {
     // token-bucket for the IPS speed limiter (wall-clock based, not frame-dt)
     limit_clock:      std::time::Instant,
     limit_steps_done: u64,
-    /// `limit_ips().map(f64::to_bits)` — when the dial/units change, reset the bucket so lowering IPS does not “freeze” AUTO.
+    /// `limit_ips().map(f64::to_bits)` — when the dial/units change, reset the bucket so lowering IPS does not “freeze” AUTO
     last_limit_ips_bits: Option<u64>,
     /// right panel: virtual GPIO / ADC peripherals
     show_peripherals: bool,
@@ -226,6 +229,10 @@ pub struct FullMetalApp {
     /// right panel: virtual USART terminal
     show_uart: bool,
     uart_state: UartPanelState,
+    /// Open USB serial when UART panel uses “USB serial” (released before avrdude upload)
+    uart_serial:       Option<Box<dyn SerialPort>>,
+    uart_serial_error: Option<String>,
+    uart_read_scratch: [u8; 512],
     /// right panel: firmware hex + avrdude (replaces SIM / helpers while open)
     show_upload: bool,
     upload_programmer: String,
@@ -234,7 +241,6 @@ pub struct FullMetalApp {
     upload_port_custom: bool,
     upload_status_line: String,
     upload_job_rx: Option<Receiver<String>>,
-    /// Set only after a successful assemble (Sim or Assemble and Link) with a valid `.board` in source.
     assembled_board: Option<McuModel>,
 }
 
@@ -278,6 +284,9 @@ impl FullMetalApp {
             waveform_state: WaveformState::default(),
             show_uart: false,
             uart_state: UartPanelState::default(),
+            uart_serial:       None,
+            uart_serial_error: None,
+            uart_read_scratch: [0u8; 512],
             show_upload: false,
             upload_programmer: "arduino".to_string(),
             upload_port: String::new(),
@@ -348,10 +357,11 @@ impl FullMetalApp {
         self.sim_tab = SimTab::Cpu;
         self.waveform_state = WaveformState::default();
         self.show_waveforms = false;
-        self.uart_state.rx0.clear();
-        self.uart_state.rx1.clear();
+        self.uart_state.clear_monitor();
         self.uart_state.line0.clear();
         self.uart_state.line1.clear();
+        self.uart_serial = None;
+        self.uart_serial_error = None;
     }
 
     fn enter_editor(&mut self, workspace: Workspace) {
@@ -510,6 +520,10 @@ impl FullMetalApp {
     }
 
     fn spawn_avrdude_upload(&mut self) {
+        // avrdude needs exclusive access to the serial device — close our monitor first.
+        self.uart_serial = None;
+        self.uart_serial_error = None;
+
         let ws = &self.workspace;
         let hex_path = ws.root.join(FIRMWARE_HEX);
         if !hex_path.is_file() {
@@ -1310,6 +1324,21 @@ impl eframe::App for FullMetalApp {
             }
         }
 
+        // USB serial: read and refresh display snapshot before painting the UART panel (same frame).
+        if self.show_uart && self.uart_state.backend == UartBackend::UsbSerial {
+            if let Some(port) = self.uart_serial.as_mut() {
+                let n = poll_hardware_serial(
+                    port.as_mut(),
+                    &mut self.uart_read_scratch,
+                    &mut self.uart_state,
+                );
+                if n > 0 {
+                    ctx.request_repaint();
+                }
+            }
+            refresh_uart_display_throttle(&mut self.uart_state);
+        }
+
         // rhs_panel_editor_only: sim, helpers, or upload (mutually exclusive)
         let mut sim_action = SimAction::None;
         let mut upload_action = UploadAction::None;
@@ -1345,6 +1374,7 @@ impl eframe::App for FullMetalApp {
                         );
                     } else if self.show_uart {
                         let model = self.mcu_model_from_editor();
+                        let ports = scan_serial_ports();
                         sim_action = show_uart_panel(
                             ui,
                             &mut self.sim,
@@ -1354,6 +1384,11 @@ impl eframe::App for FullMetalApp {
                             self.auto_running,
                             self.ips,
                             &mut self.speed_limit,
+                            &ports,
+                            &mut self.upload_port,
+                            &mut self.upload_port_custom,
+                            &mut self.uart_serial,
+                            &mut self.uart_serial_error,
                         );
                     } else if self.show_sim {
                         let peripheral_pins = self.peripheral_state.pin_occupancy();
@@ -1632,12 +1667,17 @@ impl eframe::App for FullMetalApp {
             ctx.request_repaint(); // auto_run_repaint
         }
 
+        // Simulator UART after CPU stepped; USB was already polled before the panel. Always refresh
+        // throttled snapshots so sim output and late USB bytes update the frozen view.
         if self.show_uart {
-            let model = self.mcu_model_from_editor();
-            let n = append_uart_tx_to_scrollback(&mut self.sim, model, &mut self.uart_state);
-            if n > 0 {
-                ctx.request_repaint();
+            if self.uart_state.backend == UartBackend::Simulator {
+                let model = self.mcu_model_from_editor();
+                let n = append_uart_tx_to_scrollback(&mut self.sim, model, &mut self.uart_state);
+                if n > 0 {
+                    ctx.request_repaint();
+                }
             }
+            refresh_uart_display_throttle(&mut self.uart_state);
         }
 
         show_flash_locations_window(ctx, &mut self.show_flash_locations, self.assembled_board, &self.sim);

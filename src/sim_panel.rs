@@ -19,6 +19,9 @@ const ERR_RED: Color32 = theme::ERR_RED;
 /// Simulator-attached peripheral (PORTS tab highlight).
 const PERIPH_DOT: Color32 = Color32::from_rgb(255, 210, 72);
 const PERIPH_DIM: Color32 = Color32::from_rgb(120, 95, 40);
+/// GPIO bit columns in PORTS tab — must match header digits and pin indicators.
+const GPIO_BIT_COL_WIDTH: f32 = 10.0;
+const GPIO_BIT_COL_GAP: f32 = -4.0;
 
 // public_types
 const FLASH_PER_PAGE: usize = 128;
@@ -558,10 +561,28 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
         (0u8, 0u8)
     };
 
-    ui.label(
-        RichText::new("PORT  DDR   OUT   PIN   7 6 5 4 3 2 1 0")
-            .monospace().size(11.5).color(START_GREEN_DIM),
-    );
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("PORT  DDR   OUT   PIN   ")
+                .monospace()
+                .size(11.5)
+                .color(START_GREEN_DIM),
+        );
+        for bit in (0..8u8).rev() {
+            ui.scope(|ui| {
+                ui.set_width(GPIO_BIT_COL_WIDTH);
+                ui.label(
+                    RichText::new(format!("{bit}"))
+                        .monospace()
+                        .size(11.5)
+                        .color(START_GREEN_DIM),
+                );
+            });
+            if bit > 0 {
+                ui.add_space(GPIO_BIT_COL_GAP);
+            }
+        }
+    });
     ui.add_space(2.0);
     ui.separator();
 
@@ -595,7 +616,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                 };
 
                 ui.scope(|ui| {
-                    ui.set_width(10.0);
+                    ui.set_width(GPIO_BIT_COL_WIDTH);
                     const ALT_OUT_LOW: char = '\u{2504}';
                     let dot_r = 2.05;
                     let label = if xmem_pin {
@@ -661,7 +682,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                     }
                 });
                 if bit > 0 {
-                    ui.add_space(-4.0);
+                    ui.add_space(GPIO_BIT_COL_GAP);
                 }
             }
         });

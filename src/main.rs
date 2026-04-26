@@ -7,6 +7,7 @@ mod editor;
 mod gui;
 mod modal_chrome;
 mod peripherals;
+mod real_uart;
 mod sim_panel;
 mod syntax;
 mod theme;

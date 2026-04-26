@@ -158,6 +158,8 @@ fn assemble_inner(
     let mut labels: HashMap<String, u32> = HashMap::new();
     let mut addr: u32 = 0;
     let mut segment = AsmSegment::Code;
+    // `.ureplace` applies only to the next `.uprint`; any other emitted words clear it.
+    let mut ureplace_pending = false;
     for raw in source.lines() {
         let line = strip_comment(raw).trim();
         if line.is_empty() { continue; }
@@ -180,6 +182,13 @@ fn assemble_inner(
             }
             continue;
         }
+        if is_ureplace_directive(instr_part) {
+            if let Some(lbl) = maybe_label {
+                labels.insert(lbl.to_lowercase(), addr);
+            }
+            ureplace_pending = true;
+            continue;
+        }
         // illegal in pass2 as well
         if segment == AsmSegment::Code && is_dot_byte_directive(instr_part) {
             continue;
@@ -192,7 +201,15 @@ fn assemble_inner(
             labels.insert(lbl.to_lowercase(), addr);
         }
         if !instr_part.is_empty() {
-            addr += instruction_words(instr_part);
+            if is_uprint_directive(instr_part) {
+                addr += uprint_word_count(instr_part, &mut ureplace_pending);
+            } else {
+                let w = instruction_words(instr_part);
+                if w > 0 {
+                    ureplace_pending = false;
+                }
+                addr += w;
+            }
         }
     }
 
@@ -202,6 +219,7 @@ fn assemble_inner(
     let mut errors:     Vec<AsmError>     = Vec::new();
     addr = 0;
     let mut segment = AsmSegment::Code;
+    let mut ureplace_pending = false;
     for (idx, raw) in source.lines().enumerate() {
         let line_nr = idx + 1;
         let line    = strip_comment(raw).trim();
@@ -230,6 +248,13 @@ fn assemble_inner(
             segment = seg;
             continue;
         }
+        if is_ureplace_directive(instr_part) {
+            match validate_ureplace_line(instr_part) {
+                Ok(()) => { ureplace_pending = true; }
+                Err(msg) => errors.push(AsmError { line: line_nr, msg }),
+            }
+            continue;
+        }
         if segment == AsmSegment::Code && is_dot_byte_directive(instr_part) {
             errors.push(AsmError {
                 line: line_nr,
@@ -244,10 +269,27 @@ fn assemble_inner(
         // pure label line – nothing to encode
         if maybe_label.is_some() && instr_part.is_empty() { continue; }
         let instr_line = if maybe_label.is_some() { instr_part } else { line };
+        if is_uprint_directive(instr_part) {
+            if build_map { source_map.push((line_nr, addr)); }
+            match encode_uprint(instr_line, &labels, &equates, &mut ureplace_pending) {
+                Ok(encoded) => {
+                    addr += encoded.len() as u32;
+                    words.extend(encoded);
+                }
+                Err(msg) => errors.push(AsmError { line: line_nr, msg }),
+            }
+            continue;
+        }
         if build_map { source_map.push((line_nr, addr)); }
         match encode(instr_line, addr, &labels, &equates, model) {
-            Ok(encoded) => { addr += encoded.len() as u32; words.extend(encoded); }
-            Err(msg)    => errors.push(AsmError { line: line_nr, msg }),
+            Ok(encoded) => {
+                if !encoded.is_empty() {
+                    ureplace_pending = false;
+                }
+                addr += encoded.len() as u32;
+                words.extend(encoded);
+            }
+            Err(msg) => errors.push(AsmError { line: line_nr, msg }),
         }
     }
     errors.sort_by_key(|e| e.line);
@@ -818,8 +860,66 @@ fn is_data_directive(line: &str) -> bool {
     let m = line.split_whitespace().next().unwrap_or("").to_uppercase();
     matches!(
         m.as_str(),
-        ".BYTE" | ".DB" | ".ASCIZ" | ".WORD" | ".SHORT"
+        ".BYTE" | ".DB" | ".ASCIZ" | ".WORD" | ".SHORT" | ".UPRINT"
     )
+}
+
+/// `.uprint` — same as `.db` (flash bytes); pairs with `.ureplace` to prepend `\\r` for in-place UART lines
+fn is_uprint_directive(instr_part: &str) -> bool {
+    instr_part
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case(".uprint"))
+}
+
+fn is_ureplace_directive(instr_part: &str) -> bool {
+    instr_part
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case(".ureplace"))
+}
+
+fn validate_ureplace_line(instr_part: &str) -> Result<(), String> {
+    let mut it = instr_part.split_whitespace();
+    let Some(head) = it.next() else {
+        return Ok(());
+    };
+    if !head.eq_ignore_ascii_case(".ureplace") {
+        return Ok(());
+    }
+    if it.next().is_some() {
+        return Err(".ureplace takes no operands".to_string());
+    }
+    Ok(())
+}
+
+fn uprint_word_count(instr_part: &str, ureplace_pending: &mut bool) -> u32 {
+    let rest = instr_part
+        .split_once(|c: char| c.is_whitespace())
+        .map(|(_, r)| r.trim())
+        .unwrap_or("");
+    let extra = if *ureplace_pending { 1u32 } else { 0 };
+    *ureplace_pending = false;
+    let byte_count = db_byte_count_for_labeling(rest).saturating_add(extra);
+    ((byte_count + 1) / 2).max(1)
+}
+
+fn encode_uprint(
+    line: &str,
+    labels: &HashMap<String, u32>,
+    equates: &HashMap<String, u32>,
+    ureplace_pending: &mut bool,
+) -> Result<Vec<u16>, String> {
+    let rest = line
+        .split_once(|c: char| c.is_whitespace())
+        .map(|(_, r)| r.trim())
+        .unwrap_or("");
+    let mut bytes = collect_db_bytes(rest, equates, labels)?;
+    if *ureplace_pending {
+        bytes.insert(0, b'\r');
+    }
+    *ureplace_pending = false;
+    Ok(pack_db_bytes_to_words(&bytes))
 }
 
 fn split_comma_outside_quotes(rest: &str) -> Vec<&str> {
@@ -993,8 +1093,9 @@ fn instruction_words(line: &str) -> u32 {
     let (m, rest) = line.split_once(|c: char| c.is_whitespace()).unwrap_or((line, ""));
     let rest = rest.trim();
     match m.to_uppercase().as_str() {
+        ".UREPLACE" => 0,
         "LDS" | "STS" | "JMP" | "CALL" => 2,
-        ".BYTE" | ".DB" => {
+        ".BYTE" | ".DB" | ".UPRINT" => {
             // each pair of bytes → 1 word; at least 1 word
             let byte_count = db_byte_count_for_labeling(rest);
             ((byte_count + 1) / 2).max(1)
@@ -1046,7 +1147,7 @@ fn encode(
     let m = mnem_raw.to_uppercase();
 
     // data_directives — `.DB` = flash bytes in .CSEG (AVR); `.BYTE` is only valid in .DSEG / .ESEG (checked in assemble_inner).
-    if m == ".BYTE" || m == ".DB" {
+    if m == ".BYTE" || m == ".DB" || m == ".UPRINT" {
         let bytes = collect_db_bytes(rest, equates, labels)?;
         return Ok(pack_db_bytes_to_words(&bytes));
     }
@@ -2120,6 +2221,28 @@ mod tests {
         assert!(errs[0].msg.contains(".CSEG"));
         let errs2 = assemble(&b128("foo: .BYTE 1")).unwrap_err();
         assert_eq!(errs2.len(), 1);
+    }
+
+    #[test]
+    fn asm_uprint_ureplace_prepends_cr() {
+        let w = assemble(&b128(".ureplace\n.uprint \"X\"")).unwrap();
+        assert_eq!(w.len(), 1);
+        // `\r` + 'X' → lo 0x0D, hi 0x58
+        assert_eq!(w[0], 0x580D);
+    }
+
+    #[test]
+    fn asm_ureplace_cleared_by_instruction_before_uprint() {
+        let w = assemble(&b128(".ureplace\nNOP\n.uprint \"X\"")).unwrap();
+        assert_eq!(w[0], 0x0000); // NOP
+        assert_eq!(w[1], 0x0058); // 'X' only (padded)
+    }
+
+    #[test]
+    fn asm_ureplace_extra_operand_errors() {
+        let errs = assemble(&b128(".ureplace 1\nNOP")).unwrap_err();
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].msg.contains(".ureplace"));
     }
 
     #[test]
