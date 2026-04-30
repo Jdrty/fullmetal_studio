@@ -1,15 +1,10 @@
 //! flash_locations_overlay
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Grid, Layout, Margin, RichText, ScrollArea, Stroke, Ui,
+    self, Align, Button, Frame, Grid, Layout, Margin, RichText, ScrollArea, Stroke, Ui,
 };
 use crate::avr::cpu::Cpu;
 use crate::avr::McuModel;
 use crate::theme;
-use crate::theme::{START_GREEN, START_GREEN_DIM};
-
-const FOCUS: Color32 = theme::FOCUS;
-const DIM: Color32 = theme::DIM_GRAY;
-const SEC_COL: Color32 = theme::SECTION;
 
 pub fn show_flash_locations_window(
     ctx: &egui::Context,
@@ -32,29 +27,29 @@ pub fn show_flash_locations_window(
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .frame(
             Frame::NONE
-                .fill(theme::PANEL_DEEP)
-                .stroke(Stroke::new(1.5, START_GREEN))
+                .fill(theme::panel_over_wallpaper(ctx, theme::panel_deep()))
+                .stroke(Stroke::new(1.5, theme::start_green()))
                 .inner_margin(Margin::same(16)),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 Frame::NONE
-                    .fill(theme::BUTTON_FILL_STRONG)
+                    .fill(theme::button_fill_strong())
                     .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.label(
                             RichText::new("[ FLASH LOCATIONS ]")
                                 .monospace()
                                 .size(16.0)
-                                .color(START_GREEN),
+                                .color(theme::start_green()),
                         );
                     });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .add(
-                            Button::new(RichText::new("  X  ").monospace().size(13.0).color(START_GREEN))
-                                .fill(theme::BUTTON_FILL_STRONG)
-                                .stroke(Stroke::new(1.0, START_GREEN)),
+                            Button::new(RichText::new("  X  ").monospace().size(13.0).color(theme::start_green()))
+                                .fill(theme::button_fill_strong())
+                                .stroke(Stroke::new(1.0, theme::start_green())),
                         )
                         .clicked()
                     {
@@ -71,7 +66,7 @@ pub fn show_flash_locations_window(
                         RichText::new(format!("Target: {}", board.label()))
                             .monospace()
                             .size(14.0)
-                            .color(START_GREEN_DIM),
+                            .color(theme::start_green_dim()),
                     );
                 });
                 ui.add_space(6.0);
@@ -87,7 +82,7 @@ pub fn show_flash_locations_window(
                     ))
                     .monospace()
                     .size(11.0)
-                    .color(DIM),
+                    .color(theme::dim_gray()),
                 );
             } else {
                 ui.horizontal(|ui| {
@@ -95,7 +90,7 @@ pub fn show_flash_locations_window(
                         RichText::new("Target: —  (assemble with a `.board` line to fix IVT addresses)")
                             .monospace()
                             .size(13.0)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     );
                 });
             }
@@ -152,14 +147,14 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
             RichText::new("INTERRUPT VECTOR TABLE  (0x0000 – 0x????, byte addresses)")
                 .monospace()
                 .size(12.5)
-                .color(SEC_COL),
+                .color(theme::section()),
         );
         ui.add_space(4.0);
         ui.label(
             RichText::new("  ADDR   VECTOR           CONTENT")
                 .monospace()
                 .size(11.0)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         ui.separator();
         ui.add_space(2.0);
@@ -172,19 +167,19 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
                         RichText::new("  ???")
                             .monospace()
                             .size(11.5)
-                            .color(START_GREEN_DIM),
+                            .color(theme::start_green_dim()),
                     );
                     ui.label(
                         RichText::new("???")
                             .monospace()
                             .size(11.5)
-                            .color(DIM),
+                            .color(theme::dim_gray()),
                     );
                     ui.label(
                         RichText::new("???")
                             .monospace()
                             .size(11.5)
-                            .color(DIM),
+                            .color(theme::dim_gray()),
                     );
                     ui.end_row();
                 }
@@ -194,7 +189,7 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
             RichText::new("  Code area begins at 0x???? (byte address), first word after IVT")
                 .monospace()
                 .size(11.0)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         return;
     }
@@ -207,7 +202,7 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
         ))
         .monospace()
         .size(12.5)
-        .color(SEC_COL),
+        .color(theme::section()),
     );
     ui.add_space(4.0);
 
@@ -215,7 +210,7 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
         RichText::new("  ADDR   VECTOR           CONTENT")
             .monospace()
             .size(11.0)
-            .color(DIM),
+            .color(theme::dim_gray()),
     );
     ui.separator();
     ui.add_space(2.0);
@@ -227,15 +222,15 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
             for addr in 0..=ivt_end_word {
                 let Some(name) = cpu.ivt_name(addr) else { continue; };
                 let (content, occupied) = vector_content(cpu, addr);
-                let name_col = if occupied { FOCUS } else { DIM };
-                let cont_col = if occupied { START_GREEN } else { DIM };
+                let name_col = if occupied { theme::focus() } else { theme::dim_gray() };
+                let cont_col = if occupied { theme::start_green() } else { theme::dim_gray() };
                 let addr_byte = addr * 2;
 
                 ui.label(
                     RichText::new(format!("  0x{addr_byte:04X}"))
                         .monospace()
                         .size(11.5)
-                        .color(START_GREEN_DIM),
+                        .color(theme::start_green_dim()),
                 );
                 ui.label(
                     RichText::new(format!("{name:<16}"))
@@ -258,7 +253,7 @@ fn show_ivt_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
         ))
         .monospace()
         .size(11.0)
-        .color(DIM),
+        .color(theme::dim_gray()),
     );
 }
 
@@ -268,14 +263,14 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
             RichText::new("CODE REGIONS  (non-empty flash beyond IVT end 0x???? bytes)")
                 .monospace()
                 .size(12.5)
-                .color(SEC_COL),
+                .color(theme::section()),
         );
         ui.add_space(4.0);
         ui.label(
             RichText::new("  START    END      WORDS    DISASM (first instr)")
                 .monospace()
                 .size(11.0)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         ui.separator();
         ui.add_space(2.0);
@@ -287,25 +282,25 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
                     RichText::new("  ???")
                         .monospace()
                         .size(11.5)
-                        .color(FOCUS),
+                        .color(theme::focus()),
                 );
                 ui.label(
                     RichText::new("???")
                         .monospace()
                         .size(11.5)
-                        .color(START_GREEN_DIM),
+                        .color(theme::start_green_dim()),
                 );
                 ui.label(
                     RichText::new("???")
                         .monospace()
                         .size(11.5)
-                        .color(START_GREEN),
+                        .color(theme::start_green()),
                 );
                 ui.label(
                     RichText::new("???")
                         .monospace()
                         .size(11.5)
-                        .color(DIM),
+                        .color(theme::dim_gray()),
                 );
                 ui.end_row();
             });
@@ -320,7 +315,7 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
         ))
         .monospace()
         .size(12.5)
-        .color(SEC_COL),
+        .color(theme::section()),
     );
     ui.add_space(4.0);
 
@@ -360,7 +355,7 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
             RichText::new("  (flash is empty — assemble a program first)")
                 .monospace()
                 .size(11.5)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         return;
     }
@@ -376,7 +371,7 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
         ))
         .monospace()
         .size(11.5)
-        .color(START_GREEN_DIM),
+        .color(theme::start_green_dim()),
     );
     ui.add_space(4.0);
 
@@ -384,7 +379,7 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
         RichText::new("  START    END      WORDS    DISASM (first instr)")
             .monospace()
             .size(11.0)
-            .color(DIM),
+            .color(theme::dim_gray()),
     );
     ui.separator();
     ui.add_space(2.0);
@@ -399,25 +394,25 @@ fn show_code_regions_section(ui: &mut Ui, cpu: &Cpu, board_known: bool) {
                     RichText::new(format!("  0x{start:04X}"))
                         .monospace()
                         .size(11.5)
-                        .color(FOCUS),
+                        .color(theme::focus()),
                 );
                 ui.label(
                     RichText::new(format!("0x{:04X}", end - 1))
                         .monospace()
                         .size(11.5)
-                        .color(START_GREEN_DIM),
+                        .color(theme::start_green_dim()),
                 );
                 ui.label(
                     RichText::new(format!("{words:>6} words"))
                         .monospace()
                         .size(11.5)
-                        .color(START_GREEN),
+                        .color(theme::start_green()),
                 );
                 ui.label(
                     RichText::new(first_disasm)
                         .monospace()
                         .size(11.5)
-                        .color(DIM),
+                        .color(theme::dim_gray()),
                 );
                 ui.end_row();
             }

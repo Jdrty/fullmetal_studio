@@ -117,9 +117,10 @@ fn is_board_directive(instr_part: &str) -> bool {
 
 /// assemble source and also return a source-map of (1-indexed line → word address)
 /// only instruction lines appear in the map; labels, directives, and blanks are omitted
+/// third value: label → word address from pass 1 (mixed segments; filter by flash size for code-only)
 pub fn assemble_full(
     source: &str,
-) -> Result<(Vec<u16>, Vec<(usize, u32)>), Vec<AsmError>> {
+) -> Result<(Vec<u16>, Vec<(usize, u32)>, HashMap<String, u32>), Vec<AsmError>> {
     let model = parse_board_from_source(source)?;
     assemble_inner(source, model, true)
 }
@@ -131,14 +132,14 @@ pub fn assemble(source: &str) -> Result<Vec<u16>, Vec<AsmError>> {
 
 pub fn assemble_for_model(source: &str) -> Result<Vec<u16>, Vec<AsmError>> {
     let model = parse_board_from_source(source)?;
-    assemble_inner(source, model, false).map(|(w, _)| w)
+    assemble_inner(source, model, false).map(|(w, _, _)| w)
 }
 
 fn assemble_inner(
     source: &str,
     model: McuModel,
     build_map: bool,
-) -> Result<(Vec<u16>, Vec<(usize, u32)>), Vec<AsmError>> {
+) -> Result<(Vec<u16>, Vec<(usize, u32)>, HashMap<String, u32>), Vec<AsmError>> {
     // preprocess: normalize local numeric labels (1: / 1b / 1f)
     let preprocessed = normalize_local_labels(source);
     let source = preprocessed.as_str();
@@ -293,7 +294,7 @@ fn assemble_inner(
         }
     }
     errors.sort_by_key(|e| e.line);
-    if errors.is_empty() { Ok((words, source_map)) } else { Err(errors) }
+    if errors.is_empty() { Ok((words, source_map, labels)) } else { Err(errors) }
 }
 
 // directive_handling
@@ -568,7 +569,10 @@ fn builtin_equates(model: McuModel) -> HashMap<String, u32> {
         add("OCIE0", 1);
     }
     add("TOIE1", 2); add("OCIE1B", 3); add("OCIE1A", 4); add("TICIE1", 5);
-    add("TOIE2", 6); add("OCIE2", 7);
+    if model == McuModel::Atmega128A {
+        add("TOIE2", 6);
+        add("OCIE2", 7);
+    }
 
     // tifr
     add("TOV0", 0);
@@ -576,7 +580,10 @@ fn builtin_equates(model: McuModel) -> HashMap<String, u32> {
         add("OCF0", 1);
     }
     add("TOV1", 2); add("OCF1B", 3); add("OCF1A", 4); add("ICF1", 5);
-    add("TOV2", 6); add("OCF2",  7);
+    if model == McuModel::Atmega128A {
+        add("TOV2", 6);
+        add("OCF2", 7);
+    }
 
     // spi_bits
     add("SPR0", 0); add("SPR1", 1); add("CPHA", 2); add("CPOL", 3);
@@ -643,8 +650,14 @@ fn builtin_equates(model: McuModel) -> HashMap<String, u32> {
         // t0 / EEPROM names for ATmega328P
         add("OCIE0A", 1);
         add("OCIE0B", 2);
+        add("TOIE2", 0);
+        add("OCIE2A", 1);
+        add("OCIE2B", 2);
         add("OCF0A", 1);
         add("OCF0B", 2);
+        add("TOV2", 0);
+        add("OCF2A", 1);
+        add("OCF2B", 2);
         add("FOC0A", 7);
         add("FOC0B", 6);
         add("EEPE", 1);
@@ -1608,8 +1621,14 @@ fn imm_u8_sym(
     labels: &HashMap<String, u32>,
 ) -> Result<u8, String> {
     let v = sym(s.trim(), equates, Some(labels))?;
-    guard(v <= 255, &format!("Immediate {v} > 255"))?;
-    Ok(v as u8)
+    // `sym` is u32; unary `-48` becomes 0xFFFF_FFD0. Accept 0…255 or any 32-bit
+    // sign-extension of an 8-bit negative (-128…-1 → high bytes all ones).
+    if v <= 255 || v >= 0xFFFF_FF80 {
+        return Ok(v as u8);
+    }
+    Err(format!(
+        "Immediate {v} does not fit in 8 bits (use 0–255, or -128…-1 for two's complement)"
+    ))
 }
 
 // expression evaluator: handles (1 << N) | ... operands
@@ -1945,6 +1964,19 @@ mod tests {
     fn asm_nop()  { assert_eq!(assemble(&b128("NOP")).unwrap(), &[0x0000]); }
     #[test]
     fn asm_ldi()  { assert_eq!(assemble(&b128("LDI R16, 0x0A")).unwrap(), &[0xE00A]); }
+
+    #[test]
+    fn asm_subi_negative_imm_8bit_wrap() {
+        // SUBI subtracts unsigned K; -48 → byte 0xD0 (208), same as `SUBI R16, 208`.
+        let words = assemble(&b128("SUBI R16, -48")).unwrap();
+        assert_eq!(words, &[0x5D00]);
+        assert_eq!(assemble(&b128("SUBI R16, 208")).unwrap(), words);
+    }
+
+    #[test]
+    fn asm_ldi_negative_one() {
+        assert_eq!(assemble(&b128("LDI R16, -1")).unwrap(), &[0xEF0F]);
+    }
     #[test]
     fn asm_add()  { assert_eq!(assemble(&b128("ADD R16, R17")).unwrap(), &[0x0F01]); }
 
@@ -2016,6 +2048,15 @@ mod tests {
         let words = assemble(&b328(src)).unwrap();
         let imm = (((words[0] >> 4) & 0xF0) | (words[0] & 0x0F)) as u8;
         assert_eq!(imm, 0x83);
+    }
+
+    #[test]
+    fn asm_328p_timsk2_ocie2a_predefines() {
+        // TIMSK2: TOIE2=0, OCIE2A=1, OCIE2B=2 (iom328p.h), not legacy unified TIMSK bits 6–7.
+        let src = "LDI R16, (1<<OCIE2A)";
+        let words = assemble(&b328(src)).unwrap();
+        let imm = (((words[0] >> 4) & 0xF0) | (words[0] & 0x0F)) as u8;
+        assert_eq!(imm, 0x02);
     }
 
     #[test]

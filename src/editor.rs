@@ -3,9 +3,10 @@
 use eframe::egui::{
     self,
     gui_zoom::kb_shortcuts,
-    text::{CCursor, CCursorRange, CursorRange},
-    Align, Align2, Color32, FontFamily, FontId, Id, Key, Layout, Margin, Modifiers, Order, RichText,
+    text::{CCursor, CCursorRange, CursorRange, LayoutJob, TextFormat},
+    Align2, Color32, FontFamily, FontId, Id, Key, Margin, Modifiers, Order, Pos2, Rect, RichText,
     ScrollArea, TextEdit, Ui, Vec2,
+    pos2,
 };
 
 use crate::modal_chrome::{
@@ -13,44 +14,39 @@ use crate::modal_chrome::{
 };
 use crate::syntax::highlight_avr;
 use crate::theme;
-use crate::theme::START_GREEN;
 
 pub struct SearchBar {
-    pub visible:      bool,
-    pub query:        String,
-    prev_query:       String,
-    /// char-index start of each match
-    pub matches:      Vec<usize>,
-    pub current:      usize,
-    needs_focus:      bool,
-    /// if idk(y), scroll area jumps to this offset once
-    pub next_scroll:  Option<f32>,
-    /// set after navigate(); cleared after cursor is pushed once
-    pending_cursor:   bool,
-    /// After Cmd+F / open: select all query text once focus lands (replace-on-type).
-    select_all_on_focus: bool,
-    id: Id,
+    pub visible:             bool,
+    pub query:               String,
+    prev_query:              String,
+    pub matches:             Vec<usize>,
+    pub current:             usize,
+    needs_focus:             bool,
+    pub next_scroll:         Option<f32>,
+    pending_cursor:          bool,
+    select_all_on_focus:     bool,
+    id:                      Id,
 }
 
 impl SearchBar {
     fn new(parent_id: Id) -> Self {
         Self {
-            visible:        false,
-            query:          String::new(),
-            prev_query:     String::new(),
-            matches:        Vec::new(),
-            current:        0,
-            needs_focus:    false,
-            next_scroll:    None,
-            pending_cursor: false,
+            visible:             false,
+            query:               String::new(),
+            prev_query:          String::new(),
+            matches:             Vec::new(),
+            current:             0,
+            needs_focus:         false,
+            next_scroll:         None,
+            pending_cursor:      false,
             select_all_on_focus: false,
-            id: parent_id.with("search_input"),
+            id:                  parent_id.with("search_input"),
         }
     }
 
     pub fn open(&mut self) {
-        self.visible     = true;
-        self.needs_focus = true;
+        self.visible             = true;
+        self.needs_focus         = true;
         self.select_all_on_focus = true;
     }
 
@@ -63,7 +59,6 @@ impl SearchBar {
         self.pending_cursor = false;
     }
 
-    /// rebuild match list from source (its not case sensitive)
     pub fn rebuild(&mut self, source: &str) {
         if self.query == self.prev_query { return; }
         self.prev_query = self.query.clone();
@@ -85,7 +80,6 @@ impl SearchBar {
         }
     }
 
-    /// navigate ±1, wrapping, then schedule a scroll and cursor push
     pub fn navigate(&mut self, delta: i32, source: &str, row_h: f32) {
         if self.matches.is_empty() { return; }
         let n = self.matches.len();
@@ -103,20 +97,45 @@ impl SearchBar {
     }
 }
 
-// char-index → byte-index
 fn char_to_byte(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
 }
 
 fn char_slice(s: &str, start_c: usize, end_c: usize) -> &str {
     let start_b = char_to_byte(s, start_c);
-    let end_b = char_to_byte(s, end_c);
+    let end_b   = char_to_byte(s, end_c);
     &s[start_b..end_b]
+}
+
+#[inline]
+fn gutter_row_center_y(galley_pos_y: f32, row_min_y: f32, row_max_y: f32, row_h: f32) -> f32 {
+    let bottom = row_max_y.max(row_min_y + row_h);
+    galley_pos_y + (row_min_y + bottom) * 0.5
+}
+
+fn editor_line_vertical_span(
+    i: usize,
+    nlines: usize,
+    line_ys: &[f32],
+    galley_top: f32,
+    content_bottom: f32,
+) -> (f32, f32) {
+    let top = if i == 0 {
+        galley_top
+    } else {
+        (line_ys[i - 1] + line_ys[i]) * 0.5
+    };
+    let bottom = if i + 1 < nlines {
+        (line_ys[i] + line_ys[i + 1]) * 0.5
+    } else {
+        content_bottom
+    };
+    (top, bottom)
 }
 
 fn line_char_range_at_cursor(text: &str, cursor_c: usize) -> (usize, usize) {
     let mut line_start = 0usize;
-    let mut pos = 0usize;
+    let mut pos        = 0usize;
     for ch in text.chars() {
         if ch == '\n' {
             if cursor_c <= pos {
@@ -136,11 +155,9 @@ fn leading_tab_prefix(line: &str) -> &str {
 
 fn try_smart_enter_insert(source: &mut String, cursor_c: usize) -> Option<usize> {
     let (line_start, line_end) = line_char_range_at_cursor(source, cursor_c);
-    let full_line = char_slice(source, line_start, line_end);
+    let full_line    = char_slice(source, line_start, line_end);
     let leading_tabs = leading_tab_prefix(full_line);
-    if leading_tabs.is_empty() {
-        return None;
-    }
+    if leading_tabs.is_empty() { return None; }
     let rest = full_line.strip_prefix(leading_tabs).unwrap_or("");
     let insert = if rest.trim().is_empty() {
         "\n".to_string()
@@ -153,7 +170,6 @@ fn try_smart_enter_insert(source: &mut String, cursor_c: usize) -> Option<usize>
     Some(cursor_c + insert_len)
 }
 
-/// split LayoutJob sections at [byte_start, byte_end) and colour only that slice
 fn apply_highlight(
     job:        &mut egui::text::LayoutJob,
     byte_start: usize,
@@ -167,18 +183,15 @@ fn apply_highlight(
         if se <= byte_start || ss >= byte_end {
             out.push(sec);
         } else {
-            // part before the match
             if ss < byte_start {
                 let mut before = sec.clone();
                 before.byte_range = ss..byte_start;
                 out.push(before);
             }
-            // exact match slice
             let mut mid = sec.clone();
-            mid.byte_range    = byte_start.max(ss)..byte_end.min(se);
+            mid.byte_range        = byte_start.max(ss)..byte_end.min(se);
             mid.format.background = bg;
             out.push(mid);
-            // part after the match
             if se > byte_end {
                 let mut after = sec.clone();
                 after.byte_range = byte_end..se;
@@ -198,6 +211,9 @@ pub struct TextEditor {
     board_inline_accept_ok: bool,
     monospace_px: f32,
     pub search:   SearchBar,
+    line_y_cache: Vec<f32>,
+    last_content_bottom_cache: f32,
+    zebra_anchor: Option<Pos2>,
 }
 
 impl TextEditor {
@@ -212,27 +228,31 @@ impl TextEditor {
             board_inline_accept_ok: false,
             monospace_px: 14.0,
             search,
+            line_y_cache:              Vec::new(),
+            last_content_bottom_cache: 0.0,
+            zebra_anchor:              None,
         }
     }
 
     pub fn reset_for_session(&mut self) {
         self.cursor_line = 0;
+        self.zebra_anchor = None;
         self.focus_next_frame();
     }
 
     pub fn set_source(&mut self, source: String) {
-        self.saved_source = source.clone();
-        self.source       = source;
-        self.cursor_line  = 0;
+        self.saved_source              = source.clone();
+        self.source                    = source;
+        self.cursor_line               = 0;
+        self.line_y_cache.clear();
+        self.last_content_bottom_cache = 0.0;
+        self.zebra_anchor = None;
     }
 
     pub fn source(&self) -> &str { &self.source }
     pub fn is_dirty(&self) -> bool { self.source != self.saved_source }
     pub fn mark_saved(&mut self) { self.saved_source = self.source.clone(); }
-
-    pub fn discard_unsaved_changes(&mut self) {
-        self.source = self.saved_source.clone();
-    }
+    pub fn discard_unsaved_changes(&mut self) { self.source = self.saved_source.clone(); }
     pub fn focus_next_frame(&mut self) { self.needs_focus = true; }
 
     pub fn request_initial_focus(&mut self, ctx: &egui::Context) {
@@ -242,19 +262,12 @@ impl TextEditor {
         }
     }
 
-    pub fn text_edit_id(&self) -> Id {
-        self.id
-    }
+    pub fn text_edit_id(&self) -> Id { self.id }
 
-    pub fn board_inline_accept_ok(&self) -> bool {
-        self.board_inline_accept_ok
-    }
+    pub fn board_inline_accept_ok(&self) -> bool { self.board_inline_accept_ok }
 
-    /// Cmd+Plus / Cmd+Minus / Cmd+0 adjust monospace size for this editor only (global GUI zoom is off).
     pub fn apply_editor_zoom_keyboard(&mut self, ctx: &egui::Context) {
-        if !ctx.memory(|m| m.has_focus(self.id)) {
-            return;
-        }
+        if !ctx.memory(|m| m.has_focus(self.id)) { return; }
         if ctx.input_mut(|i| i.consume_shortcut(&kb_shortcuts::ZOOM_RESET)) {
             self.monospace_px = 14.0;
             ctx.request_repaint();
@@ -274,32 +287,24 @@ impl TextEditor {
     }
 
     pub fn apply_board_inline_completion(&mut self, ctx: &egui::Context) {
-        let lines = text_lines(&self.source);
+        let lines    = text_lines(&self.source);
         let line_idx = self.cursor_line.min(lines.len().saturating_sub(1));
-        let Some(line) = lines.get(line_idx) else {
-            return;
-        };
-        let Some((indent, partial)) = parse_dot_board_line(line) else {
-            return;
-        };
-        let Some(suffix) = board_ghost_suffix(partial) else {
-            return;
-        };
-        let p = partial.trim();
-        let chip = format!("{p}{suffix}");
+        let Some(line) = lines.get(line_idx) else { return; };
+        let Some((indent, partial)) = parse_dot_board_line(line) else { return; };
+        let Some(suffix) = board_ghost_suffix(partial) else { return; };
+        let p        = partial.trim();
+        let chip     = format!("{p}{suffix}");
         let new_line = format!("{indent}.board {chip}");
         replace_line_in_source(&mut self.source, line_idx, &new_line);
         let eol = line_end_char_index(&self.source, line_idx);
         if let Some(mut ts) = TextEdit::load_state(ctx, self.id) {
-            ts.cursor
-                .set_char_range(Some(CCursorRange::one(CCursor::new(eol))));
+            ts.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(eol))));
             TextEdit::store_state(ctx, self.id, ts);
         }
         ctx.request_repaint();
     }
 
-    pub fn show(&mut self, ui: &mut Ui, show_ghost_hint: bool) {
-        // shortcuts hooray
+    pub fn show(&mut self, ui: &mut Ui, show_ghost_hint: bool, text_back: Color32) {
         let cmd_f = ui.input_mut(|i| {
             i.consume_shortcut(&egui::KeyboardShortcut::new(
                 if cfg!(target_os = "macos") { Modifiers::MAC_CMD } else { Modifiers::CTRL },
@@ -308,13 +313,10 @@ impl TextEditor {
         });
         if cmd_f { self.search.open(); }
 
-        // escape only closes search when the search input actually has keyboard focus,
-        // so normal editor typing / other shortcuts are never broken
         if self.search.visible {
             let search_focused = ui.ctx().memory(|m| m.has_focus(self.search.id));
             if search_focused {
-                let esc = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
-                if esc {
+                if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
                     self.search.close();
                     self.focus_next_frame();
                 }
@@ -339,13 +341,14 @@ impl TextEditor {
                         let collapsed = ccr.primary.index == ccr.secondary.index
                             && ccr.primary.prefer_next_row == ccr.secondary.prefer_next_row;
                         if collapsed {
-                            let cursor_c = ccr.primary.index;
-                            if let Some(new_cursor) = try_smart_enter_insert(&mut self.source, cursor_c) {
-                                ts.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(new_cursor))));
+                            if let Some(new_c) =
+                                try_smart_enter_insert(&mut self.source, ccr.primary.index)
+                            {
+                                ts.cursor.set_char_range(Some(CCursorRange::one(
+                                    CCursor::new(new_c),
+                                )));
                                 TextEdit::store_state(ui.ctx(), self.id, ts);
-                                ui.input_mut(|i| {
-                                    i.consume_key(Modifiers::NONE, Key::Enter);
-                                });
+                                ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
                             }
                         }
                     }
@@ -353,31 +356,22 @@ impl TextEditor {
             }
         }
 
-        let n       = line_count(&self.source);
-
+        let n          = line_count(&self.source);
         let digit_cols = (n.max(1).ilog10() + 1).max(3) as usize;
-        let gutter_w   =
-            ui.fonts(|f| f.glyph_width(&font_id, '0') * digit_cols as f32 + 14.0);
+        let gutter_w   = ui.fonts(|f| f.glyph_width(&font_id, '0') * digit_cols as f32 + 14.0);
 
-        // capture rect before any allocation (for Area positioning later)
         let editor_rect = ui.available_rect_before_wrap();
-        let bg_resp = ui.interact(editor_rect, self.id.with("bg"), egui::Sense::click());
+        let bg_resp     = ui.interact(editor_rect, self.id.with("bg"), egui::Sense::click());
 
-        let current_line = self.cursor_line.min(n.saturating_sub(1));
-
-        // rebuild
         if self.search.visible {
             let snap = self.source.clone();
             self.search.rebuild(&snap);
         }
 
-        // push TextEdit cursor only when the user explicitly navigated
-        // (not every frame bc that would override normal editor cursor movement)
         if self.search.pending_cursor && !self.search.matches.is_empty() {
             let ci   = self.search.matches[self.search.current];
             let qlen = self.search.query.chars().count();
             if let Some(mut ts) = egui::TextEdit::load_state(ui.ctx(), self.id) {
-                use egui::text::CCursor;
                 ts.cursor.set_char_range(Some(egui::text::CCursorRange::two(
                     CCursor { index: ci,        prefer_next_row: false },
                     CCursor { index: ci + qlen, prefer_next_row: false },
@@ -387,12 +381,6 @@ impl TextEditor {
             self.search.pending_cursor = false;
         }
 
-        // build layouter with exact match highlights
-        // IMPORTANT: highlights are re-derived from `text` (the ground-truth
-        // string passed to the layouter each call) rather than pre-computed snapshot
-        // my reasoning for this is to avoid the "shift on insert/delete" thing where the
-        // snapshot char-offsets breaks once the TextEdit mutates the
-        // buffer during the same frame
         let search_vis     = self.search.visible;
         let search_query   = if search_vis { self.search.query.clone() } else { String::new() };
         let search_current = self.search.current;
@@ -400,7 +388,6 @@ impl TextEditor {
 
         let mut layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| {
             let mut job = highlight_avr(text, &font_id_cap);
-
             if !search_query.is_empty() {
                 let q_lo: Vec<char> = search_query.to_lowercase().chars().collect();
                 let t_lo: Vec<char> = text.to_lowercase().chars().collect();
@@ -413,9 +400,9 @@ impl TextEditor {
                         let bs  = char_to_byte(text, ci);
                         let be  = char_to_byte(text, ci + qm);
                         let col = if match_idx == search_current {
-                            theme::MATCH_CUR
+                            theme::match_cur()
                         } else {
-                            theme::MATCH_DIM
+                            theme::match_dim()
                         };
                         apply_highlight(&mut job, bs, be, col);
                         match_idx += 1;
@@ -425,12 +412,10 @@ impl TextEditor {
                     }
                 }
             }
-
             job.wrap.max_width = wrap_width;
             ui.fonts(|f| f.layout_job(job))
         };
 
-        // scrol area
         let scroll_offset = self.search.next_scroll.take();
         let mut sa = ScrollArea::vertical()
             .id_salt("editor_scroll")
@@ -442,53 +427,110 @@ impl TextEditor {
         sa.show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal_top(|ui| {
-                // gutter
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                    ui.set_width(gutter_w);
-                    for i in 0..n {
-                        let is_current = i == current_line;
-                        let display = if is_current {
-                            format!("{}", i + 1)
-                        } else {
-                            let dist = (i as isize - current_line as isize).unsigned_abs();
-                            format!("{dist}")
-                        };
-                        let color = if is_current { Color32::WHITE } else { START_GREEN };
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(gutter_w, row_h),
-                            Layout::right_to_left(Align::Center),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new(display)
-                                        .font(font_id.clone())
-                                        .color(color),
-                                );
-                            },
-                        );
-                    }
-                });
+                ui.add_space(gutter_w);
 
-                // text edit
+                let lines   = text_lines(&self.source);
+                let nlines  = lines.len();
+                let clip = ui.clip_rect();
+
+                if let Some(prev_gp) = self.zebra_anchor {
+                    let wallpaper_like = text_back.a() < 10;
+                    let mix_base = if wallpaper_like {
+                        theme::panel_deep()
+                    } else {
+                        text_back
+                    };
+                    let base_fill   = mix_base;
+                    let stripe_fill = theme::editor_zebra_alt_fill(mix_base);
+
+                    let line_ys_zebra: Vec<f32> = if self.line_y_cache.len() == nlines {
+                        self.line_y_cache.clone()
+                    } else {
+                        (0..nlines)
+                            .map(|i| prev_gp.y + (i as f32) * row_h + row_h * 0.5)
+                            .collect()
+                    };
+                    let content_bottom_z = if self.line_y_cache.len() == nlines {
+                        self.last_content_bottom_cache
+                    } else {
+                        prev_gp.y + (nlines.max(1) as f32) * row_h
+                    };
+
+                    let painter_z = ui.painter();
+                    for i in 0..nlines {
+                        let fill = if i % 2 == 0 { base_fill } else { stripe_fill };
+                        let (mut top, mut bottom) = editor_line_vertical_span(
+                            i,
+                            nlines,
+                            &line_ys_zebra,
+                            prev_gp.y,
+                            content_bottom_z,
+                        );
+                        if !top.is_finite() || !bottom.is_finite() {
+                            continue;
+                        }
+                        top = top.min(bottom);
+                        bottom = bottom.max(top + 1.0);
+                        let stripe_rect = Rect::from_min_max(
+                            pos2(clip.left(), top),
+                            pos2(clip.right(), bottom),
+                        )
+                        .intersect(clip);
+                        if stripe_rect.width() > 0.0 && stripe_rect.height() > 0.0 {
+                            painter_z.rect_filled(stripe_rect, 0.0, fill);
+                        }
+                    }
+
+                    let mut top = content_bottom_z;
+                    let mut vid = nlines;
+                    while top < clip.bottom() {
+                        let fill = if vid % 2 == 0 {
+                            base_fill
+                        } else {
+                            stripe_fill
+                        };
+                        let bottom_y = (top + row_h).min(clip.bottom());
+                        let phantom_rect = Rect::from_min_max(
+                            pos2(clip.left(), top),
+                            pos2(clip.right(), bottom_y),
+                        )
+                        .intersect(clip);
+                        if phantom_rect.width() > 0.0 && phantom_rect.height() > 0.0 {
+                            painter_z.rect_filled(phantom_rect, 0.0, fill);
+                        }
+                        top += row_h;
+                        vid += 1;
+                    }
+                }
+
                 let output = TextEdit::multiline(&mut self.source)
                     .id(self.id)
                     .frame(false)
                     .code_editor()
                     .margin(Margin::ZERO)
-                    .background_color(Color32::BLACK)
+                    .background_color(Color32::TRANSPARENT)
                     .desired_width(ui.available_width())
                     .desired_rows(1)
                     .layouter(&mut layouter)
                     .show(ui);
 
-                let galley = output.galley.clone();
-                let galley_pos = output.galley_pos;
+                let galley      = output.galley.clone();
+                let galley_pos  = output.galley_pos;
+                self.zebra_anchor = Some(galley_pos);
+
                 let cursor_range: Option<CursorRange> = output.cursor_range;
 
                 self.board_inline_accept_ok = false;
 
-                if let Some(ref cr_line) = cursor_range {
-                    self.cursor_line = cr_line.primary.pcursor.paragraph;
+                if let Some(ref cr) = cursor_range {
+                    self.cursor_line = cr.primary.pcursor.paragraph;
+                } else if ui.ctx().memory(|m| m.has_focus(self.id)) {
+                    if let Some(ts) = TextEdit::load_state(ui.ctx(), self.id) {
+                        if let Some(ccr) = ts.cursor.char_range() {
+                            self.cursor_line =
+                                line_index_for_char_index(&self.source, ccr.primary.index);
+                        }
+                    }
                 }
 
                 if let Some(ref cr) = cursor_range {
@@ -507,51 +549,151 @@ impl TextEditor {
                     }
                 }
 
+                let current_line = self.cursor_line.min(nlines.saturating_sub(1));
+                let gutter_right = galley_pos.x - 4.0;
+                let tilde_color  = theme::editor_placeholder();
+
+                let mut new_line_ys: Vec<f32>  = Vec::with_capacity(nlines);
+                let mut new_last_bottom: f32   = galley_pos.y + row_h; // safe minimum
+                {
+                    let mut p = 0usize;
+                    let mut first_row_of_p: Option<f32> = None; // screen Y center of first row
+                    let mut max_y_of_p: f32 = 0.0;
+
+                    for row in &galley.rows {
+                        if p < nlines {
+                            if first_row_of_p.is_none() {
+                                first_row_of_p = Some(gutter_row_center_y(
+                                    galley_pos.y,
+                                    row.min_y(),
+                                    row.max_y(),
+                                    row_h,
+                                ));
+                            }
+                            max_y_of_p = row.max_y();
+                        }
+                        if row.ends_with_newline {
+                            if let Some(yc) = first_row_of_p.take() {
+                                new_line_ys.push(yc);
+                            } else if p < nlines {
+                                let fallback = galley_pos.y
+                                    + (p as f32) * row_h
+                                    + row_h * 0.5;
+                                new_line_ys.push(fallback);
+                            }
+                            new_last_bottom = new_last_bottom.max(galley_pos.y + max_y_of_p);
+                            p += 1;
+                            first_row_of_p = None;
+                            max_y_of_p     = 0.0;
+                        }
+                    }
+                    if p < nlines {
+                        if let Some(yc) = first_row_of_p {
+                            new_line_ys.push(yc);
+                            new_last_bottom = new_last_bottom
+                                .max(galley_pos.y + max_y_of_p);
+                        } else {
+                            new_line_ys.push(galley_pos.y + row_h * 0.5);
+                            new_last_bottom = galley_pos.y + row_h;
+                        }
+                    }
+                }
+
+                while new_line_ys.len() < nlines {
+                    let idx = new_line_ys.len();
+                    new_line_ys.push(galley_pos.y + (idx as f32) * row_h + row_h * 0.5);
+                }
+
+                let galley_settled = new_last_bottom > galley_pos.y + row_h * 0.5;
+
+                if galley_settled || self.line_y_cache.len() != nlines {
+                    self.line_y_cache              = new_line_ys.clone();
+                    self.last_content_bottom_cache = new_last_bottom;
+                }
+
+                let line_ys      = &self.line_y_cache;
+                let content_bottom = self.last_content_bottom_cache;
+                let painter = ui.painter();
+
+                let tilde_start_y = content_bottom;
+                let mut y = tilde_start_y;
+                while y + row_h * 0.35 < clip.bottom() {
+                    painter.text(
+                        egui::pos2(gutter_right, y + row_h * 0.5),
+                        Align2::RIGHT_CENTER,
+                        "~",
+                        font_id.clone(),
+                        tilde_color,
+                    );
+                    y += row_h;
+                }
+
+                for i in 0..nlines {
+                    let is_current = i == current_line;
+                    let display = if is_current {
+                        format!("{}", i + 1)
+                    } else {
+                        let dist = (i as isize - current_line as isize).unsigned_abs();
+                        format!("{dist}")
+                    };
+                    let on_stripe = i % 2 == 1;
+                    let color = if is_current {
+                        theme::text_primary()
+                    } else if on_stripe {
+                        theme::editor_zebra_rel_line_num_on_stripe()
+                    } else {
+                        theme::start_green()
+                    };
+                    let y_mid = line_ys.get(i).copied()
+                        .unwrap_or_else(|| galley_pos.y + (i as f32) * row_h + row_h * 0.5);
+                    painter.text(
+                        egui::pos2(gutter_right, y_mid),
+                        Align2::RIGHT_CENTER,
+                        display,
+                        font_id.clone(),
+                        color,
+                    );
+                }
+
                 if show_ghost_hint && self.source.is_empty() {
-                    use eframe::egui::text::{LayoutJob, TextFormat};
-                    // VS Code–style: one quiet line in the first cell, same font as editor (no busy block).
                     let mut job = LayoutJob::default();
                     job.append(
                         ".board ATmega328P",
                         0.0,
                         TextFormat {
                             font_id: font_id.clone(),
-                            color: theme::EDITOR_PLACEHOLDER,
+                            color:   theme::editor_placeholder(),
                             italics: false,
                             ..Default::default()
                         },
                     );
                     let hint_galley = ui.fonts(|f| f.layout_job(job));
                     let pos = galley_pos + Vec2::new(4.0, 2.0);
-                    ui.painter().galley(pos, hint_galley, Color32::WHITE);
-                } else {
-                    if let Some(ref cr) = cursor_range {
-                        if cr.is_empty() {
-                            let line_idx = cr.primary.pcursor.paragraph;
-                            let cursor_c = cr.primary.ccursor.index;
-                            if let Some(line) = text_lines(&self.source).get(line_idx) {
-                                if let Some(suffix) = parse_dot_board_line(line)
-                                    .and_then(|(_, p)| board_ghost_suffix(p))
-                                {
-                                    if cursor_at_line_end(&self.source, line_idx, cursor_c) {
-                                        use eframe::egui::text::{LayoutJob, TextFormat};
-                                        let ghost_color = theme::EDITOR_PLACEHOLDER;
-                                        let mut job = LayoutJob::default();
-                                        job.append(
-                                            suffix,
-                                            0.0,
-                                            TextFormat {
-                                                font_id: font_id.clone(),
-                                                color: ghost_color,
-                                                italics: true,
-                                                ..Default::default()
-                                            },
-                                        );
-                                        let g = ui.fonts(|f| f.layout_job(job));
-                                        let r = galley.pos_from_cursor(&cr.primary);
-                                        let pos = galley_pos + r.min.to_vec2();
-                                        ui.painter().galley(pos, g, Color32::WHITE);
-                                    }
+                    painter.galley(pos, hint_galley, theme::text_primary());
+                } else if let Some(ref cr) = cursor_range {
+                    if cr.is_empty() {
+                        let line_idx = cr.primary.pcursor.paragraph;
+                        let cursor_c = cr.primary.ccursor.index;
+                        if let Some(line) = text_lines(&self.source).get(line_idx) {
+                            if let Some(suffix) = parse_dot_board_line(line)
+                                .and_then(|(_, p)| board_ghost_suffix(p))
+                            {
+                                if cursor_at_line_end(&self.source, line_idx, cursor_c) {
+                                    let mut job = LayoutJob::default();
+                                    job.append(
+                                        suffix,
+                                        0.0,
+                                        TextFormat {
+                                            font_id: font_id.clone(),
+                                            color:   theme::editor_placeholder(),
+                                            italics: true,
+                                            ..Default::default()
+                                        },
+                                    );
+                                    let g   = ui.fonts(|f| f.layout_job(job));
+                                    let r   = galley.pos_from_cursor(&cr.primary);
+                                    let pos = galley_pos + r.min.to_vec2();
+                                    painter.galley(pos, g, theme::text_primary());
                                 }
                             }
                         }
@@ -565,15 +707,13 @@ impl TextEditor {
         }
 
         if self.search.visible {
-            let char_w = ui.fonts(|f| f.glyph_width(&font_id, '0'));
-            // Width tracks query length; keep empty state compact (≈2+ chars), cap very long queries.
+            let char_w  = ui.fonts(|f| f.glyph_width(&font_id, '0'));
             let q_chars = self.search.query.chars().count();
             let input_w = (char_w * (q_chars.max(2) + 2) as f32).clamp(36.0, 520.0);
 
-            // Inset from the editor panel’s top-right (not the window — avoids sitting on the toolbar).
-            let margin_x = 8.0_f32;
-            let margin_y = 6.0_f32;
-            let snap_src = self.source.clone();
+            let margin_x  = 8.0_f32;
+            let margin_y  = 6.0_f32;
+            let snap_src  = self.source.clone();
             let find_pivot = editor_rect.right_top() + Vec2::new(-margin_x, margin_y);
 
             egui::Area::new(self.id.with("search_area"))
@@ -590,7 +730,7 @@ impl TextEditor {
                                 RichText::new("Find")
                                     .monospace()
                                     .size(11.0)
-                                    .color(theme::ACCENT_DIM),
+                                    .color(theme::accent_dim()),
                             );
 
                             let query_resp = modal_single_line_edit_with_id(
@@ -608,7 +748,9 @@ impl TextEditor {
                             if self.search.select_all_on_focus
                                 && ui.ctx().memory(|m| m.has_focus(self.search.id))
                             {
-                                if let Some(mut ts) = TextEdit::load_state(ui.ctx(), self.search.id) {
+                                if let Some(mut ts) =
+                                    TextEdit::load_state(ui.ctx(), self.search.id)
+                                {
                                     let n = self.search.query.chars().count();
                                     ts.cursor.set_char_range(Some(CCursorRange::two(
                                         CCursor::new(0),
@@ -644,7 +786,7 @@ impl TextEditor {
                                 RichText::new(count_str)
                                     .monospace()
                                     .size(11.0)
-                                    .color(theme::ACCENT_DIM),
+                                    .color(theme::accent_dim()),
                             );
 
                             if modal_btn_secondary(ui, "✕").clicked() {
@@ -659,33 +801,36 @@ impl TextEditor {
 }
 
 fn line_count(text: &str) -> usize {
-    if text.is_empty() { 1 } else { text.split('\n').count() }
+    text.split('\n').count()
 }
 
-/// `str::lines()` yields nothing for `""`, but the editor has one logical line.
 fn text_lines(source: &str) -> Vec<&str> {
-    if source.is_empty() {
-        return vec![""];
+    source.split('\n').collect()
+}
+
+fn line_index_for_char_index(source: &str, char_index: usize) -> usize {
+    let n = line_count(source).max(1);
+    let mut line = 0usize;
+    for (i, c) in source.chars().enumerate() {
+        if i >= char_index { break; }
+        if c == '\n' { line += 1; }
     }
-    source.lines().collect()
+    line.min(n - 1)
 }
 
 fn parse_dot_board_line(line: &str) -> Option<(&str, &str)> {
     let indent_len = line.len().saturating_sub(line.trim_start().len());
-    let indent = &line[..indent_len];
-    let rest = line[indent_len..].trim_start();
+    let indent     = &line[..indent_len];
+    let rest       = line[indent_len..].trim_start();
     if rest.len() < 6 || !rest[..6].eq_ignore_ascii_case(".board") {
         return None;
     }
     Some((indent, rest[6..].trim_start()))
 }
 
-/// Inline ghost suffix after `.board` (VS Code style). Default chip is ATmega328P when empty.
 fn board_ghost_suffix(partial: &str) -> Option<&'static str> {
-    let p = partial.trim();
-    if p.is_empty() {
-        return Some("ATmega328P");
-    }
+    let p     = partial.trim();
+    if p.is_empty() { return Some("ATmega328P"); }
     let p_low = p.to_ascii_lowercase();
     let candidates = ["ATmega328P", "ATmega128A"];
     let mut suffs: Vec<&'static str> = Vec::new();
@@ -704,47 +849,33 @@ fn board_ghost_suffix(partial: &str) -> Option<&'static str> {
 }
 
 fn replace_line_in_source(source: &mut String, line_idx: usize, new_line: &str) {
-    let lines = text_lines(source);
+    let lines          = text_lines(source);
     let had_trailing_nl = source.ends_with('\n');
-    let mut out = String::new();
+    let mut out        = String::new();
     for (i, l) in lines.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        if i == line_idx {
-            out.push_str(new_line);
-        } else {
-            out.push_str(l);
-        }
+        if i > 0 { out.push('\n'); }
+        if i == line_idx { out.push_str(new_line); } else { out.push_str(l); }
     }
-    if had_trailing_nl {
-        out.push('\n');
-    }
+    if had_trailing_nl { out.push('\n'); }
     *source = out;
 }
 
 fn line_end_char_index(source: &str, line_idx: usize) -> usize {
-    let lines = text_lines(source);
+    let lines  = text_lines(source);
     let mut pos = 0usize;
     for (i, l) in lines.iter().enumerate() {
-        if i == line_idx {
-            return pos + l.chars().count();
-        }
+        if i == line_idx { return pos + l.chars().count(); }
         pos += l.chars().count() + 1;
     }
     0
 }
 
 fn cursor_at_line_end(source: &str, line_idx: usize, cursor_char: usize) -> bool {
-    let lines = text_lines(source);
+    let lines  = text_lines(source);
     let mut pos = 0usize;
     for (i, l) in lines.iter().enumerate() {
-        if i == line_idx {
-            let line_end = pos + l.chars().count();
-            return cursor_char == line_end;
-        }
+        if i == line_idx { return cursor_char == pos + l.chars().count(); }
         pos += l.chars().count() + 1;
     }
     false
 }
-

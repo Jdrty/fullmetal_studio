@@ -1,6 +1,9 @@
 //! entry
 
 mod avr;
+mod clipped_color_picker;
+mod customization;
+mod cost_helper;
 mod cycle_helper;
 mod docs;
 mod editor;
@@ -16,6 +19,7 @@ mod uart_panel;
 mod upload_panel;
 mod waveforms;
 mod word_helper;
+mod wallpaper_filter;
 
 fn main() -> eframe::Result {
     let native_options = eframe::NativeOptions {

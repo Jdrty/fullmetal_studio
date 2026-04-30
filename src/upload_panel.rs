@@ -1,11 +1,8 @@
 //! upload panel
-use eframe::egui::{self, Button, Color32, ComboBox, Frame, Margin, RichText, Stroke, TextEdit, Ui};
+use eframe::egui::{self, Button, Color32, Frame, Margin, RichText, Stroke, TextEdit, Ui};
 
 use crate::avr::McuModel;
 use crate::theme;
-use crate::theme::{START_GREEN, START_GREEN_DIM};
-
-const DIM: Color32 = theme::DIM_GRAY;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadAction {
@@ -59,17 +56,18 @@ pub fn show_upload_panel(
     let mut action = UploadAction::None;
 
     Frame::NONE
-        .fill(theme::PANEL_DEEP)
-        .stroke(Stroke::new(1.0, START_GREEN_DIM))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
+            ui.set_min_height(ui.available_height());
 
             ui.label(
                 RichText::new("[ UPLOAD ]")
                     .monospace()
                     .size(13.0)
-                    .color(START_GREEN),
+                    .color(theme::start_green()),
             );
             ui.add_space(6.0);
 
@@ -77,7 +75,7 @@ pub fn show_upload_panel(
                 RichText::new(format!("Output: {hex_rel_path} (replaced each build)"))
                     .monospace()
                     .size(10.5)
-                    .color(DIM),
+                    .color(theme::dim_gray()),
             );
             ui.add_space(10.0);
 
@@ -90,7 +88,7 @@ pub fn show_upload_panel(
                 RichText::new("AVRDUDE")
                     .monospace()
                     .size(11.0)
-                    .color(START_GREEN_DIM),
+                    .color(theme::start_green_dim()),
             );
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -98,7 +96,7 @@ pub fn show_upload_panel(
                     RichText::new("-p")
                         .monospace()
                         .size(11.0)
-                        .color(DIM),
+                        .color(theme::dim_gray()),
                 );
                 let part_line = match assembled_board {
                     Some(m) => format!("{}  ({})", m.avrdude_part(), m.label()),
@@ -108,7 +106,7 @@ pub fn show_upload_panel(
                     RichText::new(part_line)
                         .monospace()
                         .size(11.0)
-                        .color(START_GREEN),
+                        .color(theme::start_green()),
                 );
             });
             if assembled_board == Some(McuModel::Atmega328P) {
@@ -116,7 +114,7 @@ pub fn show_upload_panel(
                     RichText::new("Uno built-in LED: PB5 — bitmask 0x20 (0x01 is PB0 / D8).")
                         .monospace()
                         .size(9.5)
-                        .color(DIM),
+                        .color(theme::dim_gray()),
                 );
             }
             ui.horizontal(|ui| {
@@ -124,7 +122,7 @@ pub fn show_upload_panel(
                     RichText::new("-c")
                         .monospace()
                         .size(11.0)
-                        .color(DIM),
+                        .color(theme::dim_gray()),
                 );
                 ui.add(
                     TextEdit::singleline(programmer)
@@ -137,7 +135,7 @@ pub fn show_upload_panel(
                     RichText::new("-P")
                         .monospace()
                         .size(11.0)
-                        .color(DIM),
+                        .color(theme::dim_gray()),
                 );
                 let n = serial_ports.len();
                 let custom_idx = n;
@@ -156,7 +154,7 @@ pub fn show_upload_panel(
                     "Custom path…"
                 };
 
-                ComboBox::from_id_salt("upload_serial_port")
+                theme::combo_box("upload_serial_port")
                     .selected_text(
                         RichText::new(selected_label)
                             .monospace()
@@ -188,7 +186,7 @@ pub fn show_upload_panel(
                         RichText::new(" ")
                             .monospace()
                             .size(11.0)
-                            .color(DIM),
+                            .color(theme::dim_gray()),
                     );
                     ui.add(
                         TextEdit::singleline(port)
@@ -207,14 +205,14 @@ pub fn show_upload_panel(
                     RichText::new("Upload Using AVRDUDE")
                         .monospace()
                         .size(12.0)
-                        .color(if can_upload { Color32::BLACK } else { DIM }),
+                        .color(if can_upload { Color32::BLACK } else { theme::dim_gray() }),
                 )
                 .fill(if can_upload {
-                    START_GREEN
+                    theme::start_green()
                 } else {
-                    theme::DISABLED_PANEL
+                    theme::disabled_panel()
                 })
-                .stroke(Stroke::new(1.0, if can_upload { START_GREEN } else { DIM })),
+                .stroke(Stroke::new(1.0, if can_upload { theme::start_green() } else { theme::dim_gray() })),
             );
             if upload_resp.clicked() {
                 action = UploadAction::UploadAvrdude;
@@ -223,8 +221,19 @@ pub fn show_upload_panel(
                 RichText::new("Upload rebuilds firmware.hex (assemble + link), then runs avrdude.")
                     .monospace()
                     .size(9.5)
-                    .color(DIM),
+                    .color(theme::dim_gray()),
             );
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Install avrdude and ensure it is on your PATH.")
+                        .monospace()
+                        .size(10.0)
+                        .color(theme::dim_gray()),
+                );
+            }
 
             ui.add_space(10.0);
             ui.separator();
@@ -234,12 +243,14 @@ pub fn show_upload_panel(
                 RichText::new("STATUS")
                     .monospace()
                     .size(11.0)
-                    .color(START_GREEN_DIM),
+                    .color(theme::start_green_dim()),
             );
-            ui.add_space(4.0);
+            ui.add_space(6.0);
+            let status_h = (ui.available_height() - 2.0).max(48.0);
             egui::ScrollArea::vertical()
                 .id_salt("upload_status_scroll")
-                .max_height(140.0)
+                .auto_shrink([false, false])
+                .max_height(status_h)
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new(if status_line.is_empty() {
@@ -251,24 +262,14 @@ pub fn show_upload_panel(
                         .size(10.5)
                         .color(
                             if status_line.contains("Error") || status_line.contains("not found") {
-                                theme::FOCUS
+                                theme::focus()
                             } else {
-                                START_GREEN
+                                theme::start_green()
                             },
                         ),
                     );
                 });
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("Install avrdude and ensure it is on your PATH.")
-                        .monospace()
-                        .size(10.0)
-                        .color(DIM),
-                );
-            }
         });
 
     action
@@ -282,7 +283,7 @@ fn big_btn(ui: &mut Ui, label: &str) -> egui::Response {
                 .size(12.0)
                 .color(Color32::BLACK),
         )
-        .fill(START_GREEN_DIM)
-        .stroke(Stroke::new(1.0, START_GREEN)),
+        .fill(theme::start_green_dim())
+        .stroke(Stroke::new(1.0, theme::start_green())),
     )
 }

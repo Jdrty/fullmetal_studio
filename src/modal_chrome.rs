@@ -6,12 +6,11 @@ use eframe::egui::{
 };
 
 use crate::theme;
-use crate::theme::{START_GREEN, START_GREEN_DIM};
 
 pub fn modal_window_frame() -> Frame {
     Frame::NONE
-        .fill(theme::SIM_SURFACE)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::sim_surface())
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::same(14))
         .corner_radius(CornerRadius::same(5))
 }
@@ -21,7 +20,7 @@ pub fn modal_title(ui: &mut Ui, text: &str) {
         RichText::new(text)
             .monospace()
             .size(13.0)
-            .color(START_GREEN),
+            .color(theme::start_green()),
     );
 }
 
@@ -30,7 +29,7 @@ pub fn modal_body(ui: &mut Ui, text: &str) {
         RichText::new(text)
             .monospace()
             .size(12.0)
-            .color(theme::ACCENT_DIM),
+            .color(theme::accent_dim()),
     );
 }
 
@@ -39,7 +38,7 @@ pub fn modal_caption(ui: &mut Ui, text: &str) {
         RichText::new(text)
             .monospace()
             .size(11.0)
-            .color(theme::ACCENT_DIM),
+            .color(theme::accent_dim()),
     );
 }
 
@@ -48,7 +47,7 @@ pub fn modal_error(ui: &mut Ui, text: &str) {
         RichText::new(text)
             .monospace()
             .size(11.5)
-            .color(theme::ERR_RED),
+            .color(theme::err_red()),
     );
 }
 
@@ -56,7 +55,6 @@ pub fn modal_single_line_edit(ui: &mut Ui, text: &mut String) {
     modal_single_line_edit_with_id(ui, text, None, f32::INFINITY);
 }
 
-/// Same as [`modal_single_line_edit`] but with a stable widget id and width (dialogs use `INFINITY`).
 pub fn modal_single_line_edit_with_id(
     ui: &mut Ui,
     text: &mut String,
@@ -64,8 +62,8 @@ pub fn modal_single_line_edit_with_id(
     desired_width: f32,
 ) -> egui::Response {
     let inner = Frame::NONE
-        .fill(theme::SIM_SURFACE_LIFT)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::sim_surface_lift())
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::symmetric(8, 6))
         .corner_radius(CornerRadius::same(4))
         .show(ui, |ui| {
@@ -80,11 +78,10 @@ pub fn modal_single_line_edit_with_id(
     inner.inner
 }
 
-/// Compact chrome for the editor find bar (sim / peripheral style).
 pub fn search_bar_frame() -> Frame {
     Frame::NONE
-        .fill(theme::SEARCH_BG)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::search_bg())
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::symmetric(10, 8))
         .corner_radius(CornerRadius::same(5))
 }
@@ -97,8 +94,8 @@ pub fn modal_btn_primary(ui: &mut Ui, label: &str) -> egui::Response {
                 .size(12.0)
                 .color(Color32::BLACK),
         )
-        .fill(START_GREEN_DIM)
-        .stroke(Stroke::new(1.0, START_GREEN))
+        .fill(theme::start_green_dim())
+        .stroke(Stroke::new(1.0, theme::start_green()))
         .corner_radius(CornerRadius::same(5)),
     )
 }
@@ -109,10 +106,10 @@ pub fn modal_btn_secondary(ui: &mut Ui, label: &str) -> egui::Response {
             RichText::new(label)
                 .monospace()
                 .size(12.0)
-                .color(START_GREEN_DIM),
+                .color(theme::start_green_dim()),
         )
-        .fill(theme::SIM_SURFACE_LIFT)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::sim_surface_lift())
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .corner_radius(CornerRadius::same(5)),
     )
 }
@@ -123,10 +120,10 @@ pub fn modal_btn_danger(ui: &mut Ui, label: &str) -> egui::Response {
             RichText::new(label)
                 .monospace()
                 .size(12.0)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
         )
-        .fill(theme::SIM_TAB_ACTIVE)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER_BRIGHT))
+        .fill(theme::sim_tab_active())
+        .stroke(Stroke::new(0.75, theme::sim_border_bright()))
         .corner_radius(CornerRadius::same(5)),
     )
 }

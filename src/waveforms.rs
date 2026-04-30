@@ -7,19 +7,11 @@ use eframe::egui::{
     Id, Layout, Margin, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2, Visuals,
     Window,
 };
-use eframe::egui::style::HandleShape;
-
 use crate::avr::cpu::Cpu;
 use crate::avr::McuModel;
 use crate::sim_panel::{IpsUnit, SpeedLimitState};
 use crate::theme;
-use crate::theme::START_GREEN;
 
-const ADD_CIRCLE_FILL: Color32 = Color32::from_rgb(22, 26, 36);
-const ADD_CIRCLE_RIM: Color32 = Color32::from_rgb(55, 62, 78);
-const ADD_CIRCLE_INNER: Color32 = Color32::from_rgb(16, 19, 28);
-
-/// Actions from the waveforms panel (handled in [`crate::gui`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaveformAction {
     None,
@@ -103,7 +95,6 @@ pub struct WaveformState {
     pub add_port:          char,
     pub add_bit:           u8,
     pub add_error:         Option<String>,
-    pub fullscreen_id:     Option<u64>,
     next_id:               u64,
     dialog_visuals_backup: Option<Visuals>,
 }
@@ -119,7 +110,6 @@ impl Default for WaveformState {
             add_port:              'B',
             add_bit:               0,
             add_error:             None,
-            fullscreen_id:         None,
             next_id:               1,
             dialog_visuals_backup: None,
         }
@@ -162,7 +152,6 @@ impl WaveformState {
 
 pub fn on_waveforms_panel_hidden(state: &mut WaveformState, ctx: &egui::Context) {
     state.add_dialog_open = false;
-    state.fullscreen_id = None;
     if let Some(v) = state.dialog_visuals_backup.take() {
         ctx.style_mut(|s| s.visuals = v);
     }
@@ -209,10 +198,11 @@ fn default_ports(model: McuModel) -> &'static [char] {
 }
 
 fn paint_glowing_plus(painter: &egui::Painter, center: Pos2, half: f32) {
-    let layers: [(f32, u8); 4] = [(4.0, 18), (2.5, 45), (1.2, 110), (0.0, 255)];
+    let base = theme::accent();
+    let layers: [(f32, u8); 4] = [(4.0, 18), (2.5, 45), (1.2, 110), (0.0, 220)];
     for (spread, alpha) in layers {
         let w = 2.2 + spread * 0.15;
-        let c = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
+        let c = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
         let s = Stroke::new(w, c);
         painter.line_segment(
             [pos2(center.x - half, center.y), pos2(center.x + half, center.y)],
@@ -235,26 +225,31 @@ fn circle_add_button(ui: &mut Ui, open: &mut bool) -> egui::Response {
     let c = rect.center();
     let r = size * 0.46;
 
+    let fill = theme::button_fill_strong();
+    let rim = theme::sim_border_bright();
+    let inner = theme::sim_border();
+
     p.circle_filled(c, r + 1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 45));
-    p.circle_filled(c, r, ADD_CIRCLE_FILL);
-    p.circle_stroke(c, r, Stroke::new(1.0, ADD_CIRCLE_RIM));
-    p.circle_stroke(c, r - 2.0, Stroke::new(0.65, ADD_CIRCLE_INNER));
+    p.circle_filled(c, r, fill);
+    p.circle_stroke(c, r, Stroke::new(1.0, rim));
+    p.circle_stroke(c, r - 2.0, Stroke::new(0.65, inner));
     if response.hovered() {
         p.circle_stroke(
             c,
             r + 1.5,
             Stroke::new(
                 1.0,
-                Color32::from_rgba_unmultiplied(theme::FOCUS.r(), theme::FOCUS.g(), theme::FOCUS.b(), 90),
+                Color32::from_rgba_unmultiplied(theme::focus().r(), theme::focus().g(), theme::focus().b(), 90),
             ),
         );
     }
+    let cap = theme::accent();
     p.line_segment(
         [
             pos2(c.x - r * 0.52, c.y - r * 0.62),
             pos2(c.x + r * 0.52, c.y - r * 0.62),
         ],
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 42)),
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(cap.r(), cap.g(), cap.b(), 200)),
     );
     paint_glowing_plus(&p, c, r * 0.3);
 
@@ -265,8 +260,8 @@ fn circle_add_button(ui: &mut Ui, open: &mut bool) -> egui::Response {
 
 fn add_waveform_chip(ui: &mut Ui, open: &mut bool) {
     Frame::NONE
-        .fill(theme::SIM_SURFACE)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .corner_radius(CornerRadius::same(20))
         .inner_margin(Margin::same(5))
         .show(ui, |ui| {
@@ -307,10 +302,10 @@ fn show_throughput_strip(
                 RichText::new("▶ Start")
                     .monospace()
                     .size(12.5)
-                    .color(if start_en { START_GREEN } else { theme::ACCENT_DIM }),
+                    .color(if start_en { theme::start_green() } else { theme::accent_dim() }),
             )
-            .fill(theme::SIM_SURFACE_LIFT)
-            .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+            .stroke(Stroke::new(1.0, theme::sim_border_bright()))
             .corner_radius(CornerRadius::same(6)),
         );
         if start_resp.clicked() {
@@ -326,10 +321,10 @@ fn show_throughput_strip(
                 RichText::new("⏸ Pause")
                     .monospace()
                     .size(12.5)
-                    .color(if pause_en { START_GREEN } else { theme::ACCENT_DIM }),
+                    .color(if pause_en { theme::start_green() } else { theme::accent_dim() }),
             )
-            .fill(theme::SIM_SURFACE_LIFT)
-            .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+            .stroke(Stroke::new(1.0, theme::sim_border_bright()))
             .corner_radius(CornerRadius::same(6)),
         );
         if pause_resp.clicked() {
@@ -342,15 +337,15 @@ fn show_throughput_strip(
             RichText::new("AUTO speed")
                 .monospace()
                 .size(11.5)
-                .color(theme::ACCENT),
+                .color(theme::accent()),
         );
     });
 
     ui.add_space(8.0);
 
     // Card: track + glow edge, slider gets full width (no cramped horizontal row).
-    let card_fill = Color32::from_rgb(10, 14, 24);
-    let card_rim = Color32::from_rgb(42, 52, 72);
+    let card_fill = theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift());
+    let card_rim = theme::sim_border_bright();
     Frame::NONE
         .fill(card_fill)
         .stroke(Stroke::new(1.0, card_rim))
@@ -370,14 +365,16 @@ fn show_throughput_strip(
                         RichText::new("Instruction throughput cap")
                             .monospace()
                             .size(11.0)
-                            .color(theme::ACCENT),
+                            .color(theme::accent()),
                     );
                     ui.label(
-                        RichText::new("Limits how fast the simulator runs (wall clock), not MCU f_cpu.")
-                            .monospace()
-                            .size(9.0)
-                            .line_height(Some(12.0))
-                            .color(Color32::from_rgba_unmultiplied(130, 140, 165, 220)),
+                        RichText::new(
+                            "Limits how fast the simulator runs (wall clock), not MCU f_cpu.",
+                        )
+                        .monospace()
+                        .size(9.0)
+                        .line_height(Some(12.0))
+                        .color(theme::accent_dim()),
                     );
                 });
             });
@@ -389,17 +386,12 @@ fn show_throughput_strip(
                 let slider = egui::Slider::new(&mut lim, 100.0..=20_000_000.0)
                     .logarithmic(true)
                     .show_value(true)
-                    .trailing_fill(true)
-                    .handle_shape(HandleShape::Rect { aspect_ratio: 0.45 })
                     .custom_formatter(|n, _| fmt_slider_ips(n))
                     .text("");
-                let rail = ui.style().spacing.slider_rail_height;
-                ui.style_mut().spacing.slider_rail_height = 11.0;
                 let changed = ui
                     .add_sized([w, 28.0], slider)
                     .on_hover_text("Drag to cap IPS while AUTO is running")
                     .changed();
-                ui.style_mut().spacing.slider_rail_height = rail;
                 if changed {
                     speed_limit.set_ips_from_slider(lim, false);
                 }
@@ -414,7 +406,7 @@ fn show_throughput_strip(
                         RichText::new("Unlimited (no cap)")
                             .monospace()
                             .size(11.0)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     )
                     .on_hover_text("Run AUTO as fast as possible each frame");
                 if r.changed() {
@@ -433,7 +425,7 @@ fn show_throughput_strip(
             RichText::new("Fine tune")
                 .monospace()
                 .size(10.5)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
         );
         ui.add_space(4.0);
         ui.add(
@@ -441,16 +433,16 @@ fn show_throughput_strip(
                 .desired_width(48.0)
                 .font(egui::TextStyle::Monospace),
         );
-        egui::ComboBox::from_id_salt("wf_ips_unit")
+        theme::combo_box("wf_ips_unit")
             .width(56.0)
             .selected_text(
                 RichText::new(speed_limit.unit.label())
                     .monospace()
                     .size(11.0)
-                    .color(START_GREEN),
+                    .color(theme::start_green()),
             )
             .show_ui(ui, |ui| {
-                ui.style_mut().visuals.override_text_color = Some(START_GREEN);
+                ui.style_mut().visuals.override_text_color = Some(theme::start_green());
                 for u in [IpsUnit::Ips, IpsUnit::Kips, IpsUnit::Mips] {
                     ui.selectable_value(
                         &mut speed_limit.unit,
@@ -465,7 +457,7 @@ fn show_throughput_strip(
                     RichText::new(format!("→ {}", fmt_ips_plain(lim)))
                         .monospace()
                         .size(10.5)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 );
             }
         }
@@ -481,9 +473,6 @@ const AXIS_LEFT: f32 = 56.0;
 /// Bottom margin: cycle ticks row + axis title row (no overlap with Y ticks).
 const AXIS_BOTTOM: f32 = 44.0;
 const AXIS_TOP: f32 = 6.0;
-
-const AXIS_TICK: Color32 = Color32::from_rgb(210, 220, 240);
-const AXIS_TITLE: Color32 = Color32::from_rgb(175, 190, 215);
 
 fn y_range_auto(trace: &WaveformTrace) -> (f64, f64) {
     match trace.kind {
@@ -617,12 +606,15 @@ fn draw_waveform_graph(
     let (c0, c1, y_lo, y_hi) = view_cycle_value_range(trace, cpu, viewport, f_cpu);
     let c_span = (c1.saturating_sub(c0)).max(1);
 
+    let axis_tick = theme::literal_num();
+    let axis_title_col = theme::section();
+
     let p = ui.painter_at(full);
-    p.rect_filled(full, CornerRadius::same(4), theme::SIM_SURFACE);
+    p.rect_filled(full, CornerRadius::same(4), theme::sim_surface());
     p.rect_stroke(
         full,
         CornerRadius::same(4),
-        Stroke::new(0.75, theme::SIM_BORDER),
+        Stroke::new(0.75, theme::sim_border()),
         StrokeKind::Inside,
     );
 
@@ -637,21 +629,21 @@ fn draw_waveform_graph(
         Align2::RIGHT_BOTTOM,
         fmt_y_tick(y_hi, y_kind),
         font_axis.clone(),
-        AXIS_TICK,
+        axis_tick,
     );
     p.text(
         pos2(y_label_x, plot_rect.bottom()),
         Align2::RIGHT_TOP,
         fmt_y_tick(y_lo, y_kind),
         font_axis.clone(),
-        AXIS_TICK,
+        axis_tick,
     );
     p.text(
         pos2(full.left() + 4.0, full.top() + 2.0),
         Align2::LEFT_TOP,
         "Value",
         font_title.clone(),
-        AXIS_TITLE,
+        axis_title_col,
     );
 
     // X ticks: bottom margin only (below plot), separated from Y corner.
@@ -661,14 +653,14 @@ fn draw_waveform_graph(
         Align2::LEFT_TOP,
         format!("{}", c0),
         font_axis.clone(),
-        AXIS_TICK,
+        axis_tick,
     );
     p.text(
         pos2(plot_rect.right(), cx_row_y),
         Align2::RIGHT_TOP,
         format!("{}", c1),
         font_axis.clone(),
-        AXIS_TICK,
+        axis_tick,
     );
     // Bottom-anchor so descenders stay inside `full` (CENTER_TOP at plot_rect.bottom()+offset clipped).
     p.text(
@@ -676,14 +668,14 @@ fn draw_waveform_graph(
         Align2::CENTER_BOTTOM,
         "Cycles (cumulative)",
         font_title,
-        AXIS_TITLE,
+        axis_title_col,
     );
 
-    p.rect_filled(plot_rect, CornerRadius::same(2), Color32::from_rgb(8, 10, 16));
+    p.rect_filled(plot_rect, CornerRadius::same(2), theme::panel_deep());
     p.rect_stroke(
         plot_rect,
         CornerRadius::same(2),
-        Stroke::new(0.5, Color32::from_gray(45)),
+        Stroke::new(0.5, theme::dim_gray()),
         StrokeKind::Inside,
     );
 
@@ -699,7 +691,7 @@ fn draw_waveform_graph(
     let y0 = y_at(y_lo);
     p.line_segment(
         [pos2(plot_rect.left(), y0), pos2(plot_rect.right(), y0)],
-        Stroke::new(0.45, Color32::from_gray(42)),
+        Stroke::new(0.45, theme::syntax_punct()),
     );
 
     let trace_lbl = trace.kind.label();
@@ -708,7 +700,7 @@ fn draw_waveform_graph(
         Align2::RIGHT_BOTTOM,
         trace_lbl,
         egui::FontId::monospace(10.5),
-        theme::ACCENT_DIM,
+        theme::accent_dim(),
     );
 
     let x_at = |cyc: u64| -> f32 {
@@ -722,10 +714,10 @@ fn draw_waveform_graph(
             Align2::CENTER_CENTER,
             "no samples yet",
             egui::FontId::monospace(11.0),
-            theme::ACCENT_DIM,
+            theme::accent_dim(),
         );
     } else {
-        let color = theme::ACCENT;
+        let color = theme::accent();
         match trace.kind {
             WaveformKind::PortPin { .. } => {
                 let thick = 1.8;
@@ -789,12 +781,12 @@ fn draw_waveform_graph(
 
     if let Some((a, b)) = viewport.drag_sel {
         let sel = Rect::from_two_pos(a, b);
-        let fill = Color32::from_rgba_unmultiplied(theme::FOCUS.r(), theme::FOCUS.g(), theme::FOCUS.b(), 40);
+        let fill = Color32::from_rgba_unmultiplied(theme::focus().r(), theme::focus().g(), theme::focus().b(), 40);
         p.rect_filled(sel, CornerRadius::ZERO, fill);
         p.rect_stroke(
             sel,
             CornerRadius::ZERO,
-            Stroke::new(1.0, theme::FOCUS),
+            Stroke::new(1.0, theme::focus()),
             StrokeKind::Inside,
         );
     }
@@ -822,15 +814,14 @@ fn draw_waveform_graph(
                     RichText::new("Scroll cycles")
                         .monospace()
                         .size(10.0)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 );
                 let wpan = ui.available_width().min(200.0);
                 if ui
                     .add_sized(
                         [wpan, 18.0],
                         egui::Slider::new(&mut pan, 0.0..=1.0)
-                            .show_value(false)
-                            .trailing_fill(true),
+                            .show_value(false),
                     )
                     .changed()
                 {
@@ -844,10 +835,10 @@ fn draw_waveform_graph(
                         RichText::new("Relock")
                             .monospace()
                             .size(11.0)
-                            .color(START_GREEN),
+                            .color(theme::start_green()),
                     )
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright()))
                     .corner_radius(CornerRadius::same(5)),
                 )
                 .on_hover_text("Follow the live waveform again (clear zoom / pan)")
@@ -862,20 +853,20 @@ fn draw_waveform_graph(
 fn apply_add_dialog_visuals(ui: &mut Ui) {
     let v = ui.visuals_mut();
     let corner = CornerRadius::same(6);
-    let stroke_menu = Stroke::new(1.0, theme::SIM_BORDER);
-    let stroke_hi = Stroke::new(1.0, theme::SIM_BORDER_BRIGHT);
-    v.window_fill = theme::SIM_SURFACE_LIFT;
+    let stroke_menu = Stroke::new(1.0, theme::sim_border());
+    let stroke_hi = Stroke::new(1.0, theme::sim_border_bright());
+    v.window_fill = theme::sim_surface_lift();
     v.window_stroke = stroke_menu;
     v.menu_corner_radius = corner;
-    v.extreme_bg_color = theme::SIM_SURFACE_LIFT;
+    v.extreme_bg_color = theme::sim_surface_lift();
     v.popup_shadow = epaint::Shadow {
         offset: [0, 4],
         blur:   18,
         spread: 0,
         color:  Color32::from_rgba_unmultiplied(0, 0, 0, 110),
     };
-    v.selection.bg_fill = theme::SIM_TAB_ACTIVE;
-    v.selection.stroke = Stroke::new(1.0, theme::ACCENT);
+    v.selection.bg_fill = theme::sim_tab_active();
+    v.selection.stroke = Stroke::new(1.0, theme::accent());
     let set_w = |w: &mut egui::style::WidgetVisuals, fill: Color32, fg: Color32, strk: Stroke| {
         w.bg_fill = fill;
         w.weak_bg_fill = fill;
@@ -884,31 +875,31 @@ fn apply_add_dialog_visuals(ui: &mut Ui) {
         w.corner_radius = corner;
         w.expansion = 0.0;
     };
-    set_w(&mut v.widgets.inactive, theme::SIM_SURFACE, theme::ACCENT_DIM, stroke_menu);
-    set_w(&mut v.widgets.hovered, theme::SIM_TAB_ACTIVE, theme::ACCENT, stroke_hi);
-    set_w(&mut v.widgets.active, theme::SIM_TAB_ACTIVE, theme::ACCENT, stroke_hi);
-    set_w(&mut v.widgets.open, theme::SIM_SURFACE_LIFT, theme::ACCENT, stroke_hi);
+    set_w(&mut v.widgets.inactive, theme::sim_surface(), theme::accent_dim(), stroke_menu);
+    set_w(&mut v.widgets.hovered, theme::sim_tab_active(), theme::accent(), stroke_hi);
+    set_w(&mut v.widgets.active, theme::sim_tab_active(), theme::accent(), stroke_hi);
+    set_w(&mut v.widgets.open, theme::sim_surface_lift(), theme::accent(), stroke_hi);
     set_w(
         &mut v.widgets.noninteractive,
-        theme::SIM_SURFACE_LIFT,
-        theme::ACCENT_DIM,
+        theme::sim_surface_lift(),
+        theme::accent_dim(),
         stroke_menu,
     );
 }
 
 fn angelic_dialog_button(ui: &mut Ui, text: &str, primary: bool) -> egui::Response {
     let fill = if primary {
-        Color32::from_rgba_unmultiplied(theme::ACCENT.r(), theme::ACCENT.g(), theme::ACCENT.b(), 28)
+        Color32::from_rgba_unmultiplied(theme::accent().r(), theme::accent().g(), theme::accent().b(), 28)
     } else {
-        theme::SIM_SURFACE
+        theme::sim_surface()
     };
     let stroke = if primary {
-        theme::SIM_BORDER_BRIGHT
+        theme::sim_border_bright()
     } else {
-        theme::SIM_BORDER
+        theme::sim_border()
     };
     ui.add(
-        Button::new(RichText::new(text).monospace().size(12.5).color(theme::ACCENT))
+        Button::new(RichText::new(text).monospace().size(12.5).color(theme::accent()))
             .fill(fill)
             .stroke(Stroke::new(1.0, stroke))
             .corner_radius(CornerRadius::same(6))
@@ -929,8 +920,8 @@ pub fn show_waveforms_panel(
     let f_cpu = nominal_f_cpu_hz(model);
 
     Frame::NONE
-        .fill(theme::PANEL_DEEP)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -943,7 +934,7 @@ pub fn show_waveforms_panel(
                 RichText::new("Waveforms")
                     .monospace()
                     .size(15.0)
-                    .color(theme::ACCENT),
+                    .color(theme::accent()),
             );
             ui.add_space(2.0);
             ui.label(
@@ -954,7 +945,7 @@ pub fn show_waveforms_panel(
                 .monospace()
                 .size(10.5)
                 .line_height(Some(14.0))
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
             );
 
             ui.add_space(6.0);
@@ -968,10 +959,8 @@ pub fn show_waveforms_panel(
                 220.0
             };
 
-            let fullscreen_id = state.fullscreen_id;
             let traces = &mut state.traces;
             let viewports = &mut state.viewports;
-            let fullscreen_ptr = &mut state.fullscreen_id;
             egui::ScrollArea::vertical()
                 .id_salt("wf_list")
                 .auto_shrink([false, false])
@@ -979,15 +968,12 @@ pub fn show_waveforms_panel(
                 .show(ui, |ui| {
                     let mut remove: Option<u64> = None;
                     for t in traces.iter_mut() {
-                        if fullscreen_id == Some(t.id) {
-                            continue;
-                        }
                         let tid = t.id;
                         let vp = viewports.entry(tid).or_default();
                         let graph_id = Id::new(("wf_graph", tid));
                         Frame::NONE
-                            .fill(theme::SIM_SURFACE)
-                            .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+                            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface()))
+                            .stroke(Stroke::new(0.75, theme::sim_border()))
                             .inner_margin(Margin::symmetric(10, 8))
                             .corner_radius(CornerRadius::same(8))
                             .show(ui, |ui| {
@@ -996,21 +982,9 @@ pub fn show_waveforms_panel(
                                         RichText::new(t.kind.label())
                                             .monospace()
                                             .size(12.0)
-                                            .color(theme::ACCENT),
+                                            .color(theme::accent()),
                                     );
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if ui
-                                            .small_button(
-                                                RichText::new("⛶ Full")
-                                                    .monospace()
-                                                    .size(10.5)
-                                                    .color(theme::ACCENT_DIM),
-                                            )
-                                            .on_hover_text("Expand over the editor")
-                                            .clicked()
-                                        {
-                                            *fullscreen_ptr = Some(t.id);
-                                        }
                                         if ui
                                             .small_button(
                                                 RichText::new("Remove")
@@ -1032,9 +1006,6 @@ pub fn show_waveforms_panel(
                     if let Some(id) = remove {
                         traces.retain(|x| x.id != id);
                         viewports.remove(&id);
-                        if *fullscreen_ptr == Some(id) {
-                            *fullscreen_ptr = None;
-                        }
                     }
 
                     if traces.is_empty() {
@@ -1044,7 +1015,7 @@ pub fn show_waveforms_panel(
                                 RichText::new("No traces yet")
                                     .monospace()
                                     .size(12.0)
-                                    .color(theme::ACCENT_DIM),
+                                    .color(theme::accent_dim()),
                             );
                         });
                     }
@@ -1054,8 +1025,8 @@ pub fn show_waveforms_panel(
             ui.separator();
             ui.add_space(4.0);
             Frame::NONE
-                .fill(theme::SIM_SURFACE)
-                .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+                .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface()))
+                .stroke(Stroke::new(0.75, theme::sim_border()))
                 .corner_radius(CornerRadius::same(10))
                 .inner_margin(Margin::symmetric(10, 8))
                 .show(ui, |ui| {
@@ -1064,7 +1035,7 @@ pub fn show_waveforms_panel(
                             RichText::new("Traces")
                                 .monospace()
                                 .size(10.5)
-                                .color(theme::ACCENT_DIM),
+                                .color(theme::accent_dim()),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             add_waveform_chip(ui, &mut state.add_dialog_open);
@@ -1086,8 +1057,8 @@ pub fn show_waveforms_panel(
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .frame(
                 Frame::NONE
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright()))
                     .inner_margin(Margin::symmetric(20, 18))
                     .corner_radius(CornerRadius::same(12)),
             )
@@ -1098,7 +1069,7 @@ pub fn show_waveforms_panel(
                     RichText::new("Add waveform")
                         .monospace()
                         .size(16.0)
-                        .color(theme::ACCENT),
+                        .color(theme::accent()),
                 );
                 ui.add_space(8.0);
 
@@ -1113,14 +1084,14 @@ pub fn show_waveforms_panel(
                         RichText::new("Register")
                             .monospace()
                             .size(10.5)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     );
-                    egui::ComboBox::from_id_salt("wf_reg")
+                    theme::combo_box("wf_reg")
                         .selected_text(
                             RichText::new(format!("R{}", state.add_reg))
                                 .monospace()
                                 .size(12.0)
-                                .color(theme::ACCENT),
+                                .color(theme::accent()),
                         )
                         .width(ui.available_width())
                         .show_ui(ui, |ui| {
@@ -1138,23 +1109,23 @@ pub fn show_waveforms_panel(
                             RichText::new("Port")
                                 .monospace()
                                 .size(10.5)
-                                .color(theme::ACCENT_DIM),
+                                .color(theme::accent_dim()),
                         );
                         cols[1].label(
                             RichText::new("Pin")
                                 .monospace()
                                 .size(10.5)
-                                .color(theme::ACCENT_DIM),
+                                .color(theme::accent_dim()),
                         );
                     });
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("wf_port")
+                        theme::combo_box("wf_port")
                             .selected_text(
                                 RichText::new(state.add_port.to_string())
                                     .monospace()
                                     .size(12.0)
-                                    .color(theme::ACCENT),
+                                    .color(theme::accent()),
                             )
                             .width(ui.available_width() * 0.48)
                             .show_ui(ui, |ui| {
@@ -1163,12 +1134,12 @@ pub fn show_waveforms_panel(
                                 }
                             });
                         ui.add_space(8.0);
-                        egui::ComboBox::from_id_salt("wf_bit")
+                        theme::combo_box("wf_bit")
                             .selected_text(
                                 RichText::new(format!("{}", state.add_bit))
                                     .monospace()
                                     .size(12.0)
-                                    .color(theme::ACCENT),
+                                    .color(theme::accent()),
                             )
                             .width(ui.available_width())
                             .show_ui(ui, |ui| {
@@ -1181,7 +1152,7 @@ pub fn show_waveforms_panel(
 
                 if let Some(ref err) = state.add_error {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(err).monospace().size(10.5).color(theme::ERR_RED));
+                    ui.label(RichText::new(err).monospace().size(10.5).color(theme::err_red()));
                 }
 
                 ui.add_space(18.0);
@@ -1237,123 +1208,5 @@ pub fn show_waveforms_panel(
         ui.ctx().style_mut(|s| s.visuals = v);
     }
 
-    // Expanded graph window (above central editor). Movable/resizable — avoid `.anchor` / `fixed_*`
-    // every frame, which re-locks position and size.
-    if let Some(fs_id) = state.fullscreen_id {
-        let trace_opt = state.traces.iter().find(|t| t.id == fs_id).cloned();
-        if let Some(t) = trace_opt {
-            let scr = ctx.screen_rect();
-            let margin = Vec2::splat(24.0);
-            // Moderate default — almost-full defaults made first-open huge; content must also
-            // stay within the resize rect or egui grows the window back (desired = max(user, content)).
-            let default_size = Vec2::new(
-                (scr.width() * 0.52).clamp(360.0, 720.0),
-                (scr.height() * 0.45).clamp(280.0, (scr.height() - margin.y * 2.0).max(280.0)),
-            );
-            let default_pos = scr.center() - default_size * 0.5;
-            Window::new("wf_fullscreen")
-                .title_bar(false)
-                .collapsible(false)
-                .resizable(true)
-                .resize(|r| r.with_stroke(false))
-                .default_pos(default_pos)
-                .default_size(default_size)
-                .min_size(Vec2::new(280.0, 200.0))
-                .max_size(scr.size())
-                .frame(
-                    Frame::NONE
-                        .fill(Color32::from_black_alpha(235))
-                        .inner_margin(Margin::symmetric(4, 8)),
-                )
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    ui.vertical(|ui| {
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(t.kind.label())
-                                    .monospace()
-                                    .size(16.0)
-                                    .color(theme::ACCENT),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui
-                                    .add(
-                                        Button::new(
-                                            RichText::new("⭳ Minimize")
-                                                .monospace()
-                                                .size(13.0)
-                                                .color(START_GREEN),
-                                        )
-                                        .fill(theme::SIM_SURFACE_LIFT)
-                                        .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
-                                        .corner_radius(CornerRadius::same(6)),
-                                    )
-                                    .on_hover_text("Back to panel")
-                                    .clicked()
-                                {
-                                    state.fullscreen_id = None;
-                                }
-                                ui.add_space(8.0);
-                                let can_reset = state
-                                    .viewports
-                                    .get(&fs_id)
-                                    .map(|v| v.zoomed)
-                                    .unwrap_or(false);
-                                if ui
-                                    .add_enabled(
-                                        can_reset,
-                                        Button::new(
-                                            RichText::new("Reset graph")
-                                                .monospace()
-                                                .size(12.5)
-                                                .color(if can_reset {
-                                                    START_GREEN
-                                                } else {
-                                                    theme::ACCENT_DIM
-                                                }),
-                                        )
-                                        .fill(theme::SIM_SURFACE_LIFT)
-                                        .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
-                                        .corner_radius(CornerRadius::same(6)),
-                                    )
-                                    .on_hover_text("Clear zoom / pan to default view")
-                                    .clicked()
-                                {
-                                    if let Some(vp) = state.viewports.get_mut(&fs_id) {
-                                        vp.reset_view();
-                                    }
-                                }
-                            });
-                        });
-                        ui.add_space(12.0);
-                        // `draw_waveform_graph` allocates graph_h + axes overhead — must not exceed
-                        // available height or last_content_size forces the window back open (egui Resize).
-                        let wf_fs_overhead = AXIS_BOTTOM + AXIS_TOP + 10.0;
-                        let avail_h_raw = ui.available_height();
-                        let cap_h = ui.max_rect().height();
-                        let avail_h = if avail_h_raw.is_finite() && avail_h_raw > 0.0 {
-                            avail_h_raw.min(if cap_h.is_finite() { cap_h } else { avail_h_raw })
-                        } else {
-                            240.0
-                        };
-                        let graph_h = (avail_h - wf_fs_overhead - 4.0).max(80.0);
-                        let vp = state.viewports.entry(fs_id).or_default();
-                        draw_waveform_graph(
-                            ui,
-                            &t,
-                            cpu,
-                            vp,
-                            f_cpu,
-                            graph_h,
-                            Id::new(("wf_fs_graph", fs_id)),
-                            1.0,
-                        );
-                    });
-                });
-        } else {
-            state.fullscreen_id = None;
-        }
-    }
     out_action
 }

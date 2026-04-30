@@ -11,14 +11,6 @@ use crate::avr::cpu::{
 use crate::avr::io_map;
 use crate::avr::McuModel;
 use crate::theme;
-use crate::theme::{START_GREEN, START_GREEN_DIM};
-
-const FOCUS: Color32 = theme::FOCUS;
-const DIM: Color32 = theme::DIM_GRAY;
-const ERR_RED: Color32 = theme::ERR_RED;
-/// Simulator-attached peripheral (PORTS tab highlight).
-const PERIPH_DOT: Color32 = Color32::from_rgb(255, 210, 72);
-const PERIPH_DIM: Color32 = Color32::from_rgb(120, 95, 40);
 /// GPIO bit columns in PORTS tab — must match header digits and pin indicators.
 const GPIO_BIT_COL_WIDTH: f32 = 10.0;
 const GPIO_BIT_COL_GAP: f32 = -4.0;
@@ -180,16 +172,16 @@ pub enum SimAction {
 
 fn sim_tab_button(ui: &mut Ui, active_tab: &mut SimTab, tab: SimTab, label: &'static str) -> egui::Response {
     let selected = *active_tab == tab;
-    let color = if selected { START_GREEN } else { START_GREEN_DIM };
+    let color = if selected { theme::start_green() } else { theme::start_green_dim() };
     let fill = if selected {
-        theme::SIM_TAB_ACTIVE
+        theme::panel_over_wallpaper(ui.ctx(), theme::sim_tab_active())
     } else {
-        theme::SIM_SURFACE
+        theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface())
     };
     let stroke_col = if selected {
-        theme::SIM_BORDER_BRIGHT
+        theme::sim_border_bright()
     } else {
-        theme::SIM_BORDER
+        theme::sim_border()
     };
     let sw = if selected { 1.0 } else { 0.75 };
     let resp = ui.add(
@@ -222,8 +214,8 @@ pub fn show_sim_panel(
     let mut action = SimAction::None;
 
     Frame::NONE
-        .fill(theme::PANEL_DEEP)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -237,24 +229,24 @@ pub fn show_sim_panel(
                     RichText::new(title)
                         .monospace()
                         .size(13.0)
-                        .color(START_GREEN),
+                        .color(theme::start_green()),
                 );
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(format!("PC  {:04X}", cpu.pc))
-                        .monospace().size(12.5).color(FOCUS),
+                        .monospace().size(12.5).color(theme::focus()),
                 );
                 ui.add_space(12.0);
                 ui.label(
                     RichText::new(format!("SP  {:04X}", cpu.sp))
-                        .monospace().size(12.5).color(START_GREEN_DIM),
+                        .monospace().size(12.5).color(theme::start_green_dim()),
                 );
                 ui.add_space(12.0);
                 ui.label(
                     RichText::new(format!("CYC {}", cpu.cycles))
-                        .monospace().size(12.5).color(START_GREEN_DIM),
+                        .monospace().size(12.5).color(theme::start_green_dim()),
                 );
             });
             ui.add_space(6.0);
@@ -351,20 +343,20 @@ pub fn show_sim_sticky_controls(
         if auto_running {
             if ui.add(
                 Button::new(
-                    RichText::new("\u{25A0} STOP").monospace().size(12.5).color(START_GREEN),
+                    RichText::new("\u{25A0} STOP").monospace().size(12.5).color(theme::start_green()),
                 )
-                .fill(theme::SIM_STOP_FILL)
-                .stroke(Stroke::new(1.0, theme::SIM_STOP_BORDER))
+                .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_stop_fill()))
+                .stroke(Stroke::new(1.0, theme::sim_stop_border()))
                 .corner_radius(CornerRadius::same(5)),
             ).clicked() {
                 action = SimAction::AutoToggle;
             }
         } else if ui.add(
             Button::new(
-                RichText::new("\u{25B6} AUTO").monospace().size(12.5).color(START_GREEN),
+                RichText::new("\u{25B6} AUTO").monospace().size(12.5).color(theme::start_green()),
             )
-            .fill(theme::SIM_SURFACE_LIFT)
-            .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+            .stroke(Stroke::new(1.0, theme::sim_border_bright()))
             .corner_radius(CornerRadius::same(5)),
         ).clicked() {
             action = SimAction::AutoToggle;
@@ -374,28 +366,28 @@ pub fn show_sim_sticky_controls(
             RichText::new(fmt_ips(ips, auto_running))
                 .monospace()
                 .size(12.0)
-                .color(if auto_running { FOCUS } else { DIM }),
+                .color(if auto_running { theme::focus() } else { theme::dim_gray() }),
         );
     });
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         ui.checkbox(
             &mut speed_limit.enabled,
-            RichText::new("Limit:").monospace().size(11.0).color(START_GREEN_DIM),
+            RichText::new("Limit:").monospace().size(11.0).color(theme::start_green_dim()),
         );
         ui.add(
             egui::TextEdit::singleline(&mut speed_limit.value_text)
                 .desired_width(44.0)
                 .font(egui::TextStyle::Monospace),
         );
-        egui::ComboBox::from_id_salt(ips_combo_id)
+        theme::combo_box(ips_combo_id)
             .width(58.0)
             .selected_text(
                 RichText::new(speed_limit.unit.label())
-                    .monospace().size(11.0).color(START_GREEN),
+                    .monospace().size(11.0).color(theme::start_green()),
             )
             .show_ui(ui, |ui| {
-                ui.style_mut().visuals.override_text_color = Some(START_GREEN);
+                ui.style_mut().visuals.override_text_color = Some(theme::start_green());
                 for u in [IpsUnit::Ips, IpsUnit::Kips, IpsUnit::Mips] {
                     ui.selectable_value(
                         &mut speed_limit.unit, u,
@@ -406,7 +398,7 @@ pub fn show_sim_sticky_controls(
         if let Some(lim) = speed_limit.limit_ips() {
             ui.label(
                 RichText::new(format!("= {}", fmt_ips_plain(lim)))
-                    .monospace().size(10.5).color(DIM),
+                    .monospace().size(10.5).color(theme::dim_gray()),
             );
         }
     });
@@ -417,17 +409,17 @@ pub fn show_sim_machine_status_row(ui: &mut Ui, cpu: &Cpu) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!("PC  {:04X}", cpu.pc))
-                .monospace().size(12.5).color(FOCUS),
+                .monospace().size(12.5).color(theme::focus()),
         );
         ui.add_space(12.0);
         ui.label(
             RichText::new(format!("SP  {:04X}", cpu.sp))
-                .monospace().size(12.5).color(START_GREEN_DIM),
+                .monospace().size(12.5).color(theme::start_green_dim()),
         );
         ui.add_space(12.0);
         ui.label(
             RichText::new(format!("CYC {}", cpu.cycles))
-                .monospace().size(12.5).color(START_GREEN_DIM),
+                .monospace().size(12.5).color(theme::start_green_dim()),
         );
     });
 }
@@ -445,7 +437,7 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>, board_k
                 for col in 0..4usize {
                     let idx = col * 8 + row;
                     let val = cpu.regs[idx];
-                    let color = if val != 0 { START_GREEN } else { DIM };
+                    let color = if val != 0 { theme::start_green() } else { theme::dim_gray() };
                     ui.label(
                         RichText::new(format!("R{idx:02}:{val:02X}"))
                             .monospace().size(12.0).color(color),
@@ -467,7 +459,7 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>, board_k
             ("V", SREG_V), ("N", SREG_N), ("Z", SREG_Z), ("C", SREG_C),
         ] {
             let set = (cpu.sreg >> bit) & 1 != 0;
-            let color = if set { FOCUS } else { DIM };
+            let color = if set { theme::focus() } else { theme::dim_gray() };
             ui.label(
                 RichText::new(format!("{name}:{}", (cpu.sreg >> bit) & 1))
                     .monospace().size(12.5).color(color),
@@ -486,7 +478,7 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>, board_k
             RichText::new("  (assemble with a `.board` line to show word addresses, disasm, and vector names)")
                 .monospace()
                 .size(10.5)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         ui.add_space(4.0);
         for _ in 0..8 {
@@ -494,7 +486,7 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>, board_k
                 RichText::new("   ???  ???                  [???]")
                     .monospace()
                     .size(12.0)
-                    .color(START_GREEN_DIM),
+                    .color(theme::start_green_dim()),
             );
         }
     } else {
@@ -507,7 +499,7 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>, board_k
             let op     = cpu.flash[addr as usize];
             let disasm = cpu.disasm_at(addr);
             let cyc    = Cpu::instr_cycles_str(op);
-            let color  = if is_current { FOCUS } else { START_GREEN_DIM };
+            let color  = if is_current { theme::focus() } else { theme::start_green_dim() };
             let ivt_ann = cpu.ivt_name(addr as u32)
                 .map(|n| format!("  ; <{n}>"))
                 .unwrap_or_default();
@@ -524,13 +516,13 @@ fn show_cpu_tab(ui: &mut Ui, cpu: &Cpu, last_result: Option<StepResult>, board_k
             StepResult::UnknownOpcode(op) => {
                 ui.label(
                     RichText::new(format!("! UNKNOWN OPCODE 0x{op:04X}"))
-                        .monospace().size(11.5).color(ERR_RED),
+                        .monospace().size(11.5).color(theme::err_red()),
                 );
             }
             StepResult::Halted => {
                 ui.label(
                     RichText::new("! HALTED (PC out of Flash)")
-                        .monospace().size(11.5).color(FOCUS),
+                        .monospace().size(11.5).color(theme::focus()),
                 );
             }
             StepResult::Ok => {}
@@ -566,7 +558,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
             RichText::new("PORT  DDR   OUT   PIN   ")
                 .monospace()
                 .size(11.5)
-                .color(START_GREEN_DIM),
+                .color(theme::start_green_dim()),
         );
         for bit in (0..8u8).rev() {
             ui.scope(|ui| {
@@ -575,7 +567,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                     RichText::new(format!("{bit}"))
                         .monospace()
                         .size(11.5)
-                        .color(START_GREEN_DIM),
+                        .color(theme::start_green_dim()),
                 );
             });
             if bit > 0 {
@@ -595,7 +587,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("{name}     {ddr:02X}    {port:02X}    {pin:02X}    "))
-                    .monospace().size(12.0).color(START_GREEN),
+                    .monospace().size(12.0).color(theme::start_green()),
             );
             for bit in (0..8u8).rev() {
                 let xmem_pin = xmem_active
@@ -610,9 +602,9 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                 let high   = if is_out { (port >> bit) & 1 != 0 }
                              else      { (pin  >> bit) & 1 != 0 };
                 let (ch, col) = if is_out {
-                    if high { ('\u{2588}', FOCUS) } else { ('\u{2591}', START_GREEN_DIM) }
+                    if high { ('\u{2588}', theme::focus()) } else { ('\u{2591}', theme::start_green_dim()) }
                 } else {
-                    ('\u{00B7}', DIM)
+                    ('\u{00B7}', theme::dim_gray())
                 };
 
                 ui.scope(|ui| {
@@ -626,14 +618,14 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                                     RichText::new('\u{2588}'.to_string())
                                         .monospace()
                                         .size(13.0)
-                                        .color(ERR_RED),
+                                        .color(theme::err_red()),
                                 )
                             } else {
                                 Label::new(
                                     RichText::new(ALT_OUT_LOW.to_string())
                                         .monospace()
                                         .size(13.0)
-                                        .color(ERR_RED),
+                                        .color(theme::err_red()),
                                 )
                             }
                         } else {
@@ -651,14 +643,14 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                                     RichText::new('\u{2588}'.to_string())
                                         .monospace()
                                         .size(13.0)
-                                        .color(PERIPH_DOT),
+                                        .color(theme::periph_pin_used()),
                                 )
                             } else {
                                 Label::new(
                                     RichText::new(ALT_OUT_LOW.to_string())
                                         .monospace()
                                         .size(13.0)
-                                        .color(PERIPH_DIM),
+                                        .color(theme::periph_dim()),
                                 )
                             }
                         } else {
@@ -675,10 +667,10 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
                     let resp = ui.add(label.sense(Sense::hover()));
                     if xmem_pin && !is_out {
                         ui.painter()
-                            .circle_filled(resp.rect.center(), dot_r, ERR_RED);
+                            .circle_filled(resp.rect.center(), dot_r, theme::err_red());
                     } else if periph_pin && !is_out {
                         ui.painter()
-                            .circle_filled(resp.rect.center(), dot_r, PERIPH_DOT);
+                            .circle_filled(resp.rect.center(), dot_r, theme::periph_pin_used());
                     }
                 });
                 if bit > 0 {
@@ -693,7 +685,7 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
     ui.add_space(4.0);
     ui.label(
         RichText::new("  \u{2588} OUT HIGH    \u{2591} OUT LOW    \u{00B7} INPUT")
-            .monospace().size(11.0).color(START_GREEN_DIM),
+            .monospace().size(11.0).color(theme::start_green_dim()),
     );
     if xmem_active {
         ui.add_space(2.0);
@@ -701,16 +693,16 @@ fn show_ports_tab(ui: &mut Ui, cpu: &Cpu, peripheral_pins: &[(char, u8)]) {
             RichText::new("  red \u{2588} / \u{2504} / dot — XMEM addr or data (Port A, C MSBs, G2:0)")
                 .monospace()
                 .size(11.0)
-                .color(ERR_RED),
+                .color(theme::err_red()),
         );
     }
     if !peripheral_pins.is_empty() {
         ui.add_space(2.0);
         ui.label(
-            RichText::new("  yellow \u{2588} / \u{2504} / dot — attached peripheral (Peripherals panel)")
+            RichText::new("  \u{2588} / \u{2504} / dot — attached peripheral (Peripherals panel)")
                 .monospace()
                 .size(10.5)
-                .color(PERIPH_DOT),
+                .color(theme::periph_pin_used()),
         );
     }
 }
@@ -722,7 +714,7 @@ fn show_uart_tab(ui: &mut Ui, cpu: &Cpu, board_known: bool, assembled_board: Opt
             RichText::new("Assemble with a `.board` line to see USART registers for ATmega328P or ATmega128A.")
                 .monospace()
                 .size(10.5)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         return;
     }
@@ -733,7 +725,7 @@ fn show_uart_tab(ui: &mut Ui, cpu: &Cpu, board_known: bool, assembled_board: Opt
         RichText::new("Status/control bits follow the datasheet.")
             .monospace()
             .size(10.0)
-            .color(DIM),
+            .color(theme::dim_gray()),
     );
     ui.add_space(6.0);
 
@@ -870,7 +862,7 @@ fn show_timers_tab_m328p(ui: &mut Ui, cpu: &Cpu) -> SimAction {
         flag_lbl(ui, "TOV0",  tifr0 & 0x01 != 0);
         flag_lbl(ui, "OCF0A", tifr0 & 0x02 != 0);
         flag_lbl(ui, "OCF0B", tifr0 & 0x04 != 0);
-        ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
         flag_lbl(ui, "TOIE0",  timsk0 & 0x01 != 0);
         flag_lbl(ui, "OCIE0A", timsk0 & 0x02 != 0);
         flag_lbl(ui, "OCIE0B", timsk0 & 0x04 != 0);
@@ -907,7 +899,7 @@ fn show_timers_tab_m328p(ui: &mut Ui, cpu: &Cpu) -> SimAction {
         flag_lbl(ui, "OCF1A", tifr1 & 0x02 != 0);
         flag_lbl(ui, "OCF1B", tifr1 & 0x04 != 0);
         flag_lbl(ui, "ICF1",  tifr1 & 0x20 != 0);
-        ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
         flag_lbl(ui, "TOIE1",  timsk1 & 0x01 != 0);
         flag_lbl(ui, "OCIE1A", timsk1 & 0x02 != 0);
         flag_lbl(ui, "OCIE1B", timsk1 & 0x04 != 0);
@@ -954,7 +946,7 @@ fn show_timers_tab_m328p(ui: &mut Ui, cpu: &Cpu) -> SimAction {
         flag_lbl(ui, "TOV2",  tifr2 & 0x01 != 0);
         flag_lbl(ui, "OCF2A", tifr2 & 0x02 != 0);
         flag_lbl(ui, "OCF2B", tifr2 & 0x04 != 0);
-        ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
         flag_lbl(ui, "TOIE2",  timsk2 & 0x01 != 0);
         flag_lbl(ui, "OCIE2A", timsk2 & 0x02 != 0);
         flag_lbl(ui, "OCIE2B", timsk2 & 0x04 != 0);
@@ -982,15 +974,15 @@ fn show_timers_tab_m328p(ui: &mut Ui, cpu: &Cpu) -> SimAction {
     ui.add_space(4.0);
     ui.label(
         RichText::new("Force-set interrupt flags to test ISRs (SREG I must be set).")
-            .monospace().size(10.5).color(DIM),
+            .monospace().size(10.5).color(theme::dim_gray()),
     );
     ui.add_space(6.0);
 
     let mut trig_btn = |ui: &mut Ui, label: &str, addr: u16, mask: u8| {
         if ui.add(
-            Button::new(RichText::new(label).monospace().size(11.0).color(START_GREEN))
-                .fill(theme::SIM_SURFACE_LIFT)
-                .stroke(Stroke::new(0.75, theme::SIM_BORDER_BRIGHT))
+            Button::new(RichText::new(label).monospace().size(11.0).color(theme::start_green()))
+                .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                .stroke(Stroke::new(0.75, theme::sim_border_bright()))
                 .corner_radius(CornerRadius::same(5)),
         ).clicked() {
             action = SimAction::SetIoBit { addr, mask };
@@ -1062,7 +1054,7 @@ fn show_timers_tab(ui: &mut Ui, cpu: &Cpu) -> SimAction {
     ui.horizontal(|ui| {
         flag_lbl(ui, "TOV",  tifr & 0x01 != 0);
         flag_lbl(ui, "OCF",  tifr & 0x02 != 0);
-        ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
         flag_lbl(ui, "TOIE", timsk & 0x01 != 0);
         flag_lbl(ui, "OCIE", timsk & 0x02 != 0);
     });
@@ -1095,7 +1087,7 @@ fn show_timers_tab(ui: &mut Ui, cpu: &Cpu) -> SimAction {
         flag_lbl(ui, "TOV1",   tifr & 0x04 != 0);
         flag_lbl(ui, "OCF1A",  tifr & 0x10 != 0);
         flag_lbl(ui, "OCF1B",  tifr & 0x08 != 0);
-        ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
         flag_lbl(ui, "TOIE1",  timsk & 0x04 != 0);
         flag_lbl(ui, "OCIE1A", timsk & 0x10 != 0);
         flag_lbl(ui, "OCIE1B", timsk & 0x08 != 0);
@@ -1124,7 +1116,7 @@ fn show_timers_tab(ui: &mut Ui, cpu: &Cpu) -> SimAction {
     ui.horizontal(|ui| {
         flag_lbl(ui, "TOV2",  tifr & 0x40 != 0);
         flag_lbl(ui, "OCF2",  tifr & 0x80 != 0);
-        ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
         flag_lbl(ui, "TOIE2", timsk & 0x40 != 0);
         flag_lbl(ui, "OCIE2", timsk & 0x80 != 0);
     });
@@ -1166,7 +1158,7 @@ fn show_timers_tab(ui: &mut Ui, cpu: &Cpu) -> SimAction {
             flag_lbl(ui, "OCF3A",  etifr & 0x08 != 0);
             flag_lbl(ui, "OCF3B",  etifr & 0x04 != 0);
             flag_lbl(ui, "OCF3C",  etifr & 0x02 != 0);
-            ui.label(RichText::new(" | ").monospace().size(11.0).color(DIM));
+            ui.label(RichText::new(" | ").monospace().size(11.0).color(theme::dim_gray()));
             flag_lbl(ui, "TOIE3",  etimsk & 0x10 != 0);
             flag_lbl(ui, "OCIE3A", etimsk & 0x08 != 0);
             flag_lbl(ui, "OCIE3B", etimsk & 0x04 != 0);
@@ -1200,15 +1192,15 @@ fn show_timers_tab(ui: &mut Ui, cpu: &Cpu) -> SimAction {
     ui.add_space(4.0);
     ui.label(
         RichText::new("Force-set interrupt flags to test ISRs (SREG I must be set).")
-            .monospace().size(10.5).color(DIM),
+            .monospace().size(10.5).color(theme::dim_gray()),
     );
     ui.add_space(6.0);
 
     let mut trig_btn = |ui: &mut Ui, label: &str, addr: u16, mask: u8| {
         if ui.add(
-            Button::new(RichText::new(label).monospace().size(11.0).color(START_GREEN))
-                .fill(theme::SIM_SURFACE_LIFT)
-                .stroke(Stroke::new(0.75, theme::SIM_BORDER_BRIGHT))
+            Button::new(RichText::new(label).monospace().size(11.0).color(theme::start_green()))
+                .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                .stroke(Stroke::new(0.75, theme::sim_border_bright()))
                 .corner_radius(CornerRadius::same(5)),
         ).clicked() {
             action = SimAction::SetIoBit { addr, mask };
@@ -1275,7 +1267,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             )
             .monospace()
             .size(10.5)
-            .color(DIM),
+            .color(theme::dim_gray()),
         );
         ui.add_space(6.0);
         section_label(ui, "EXTERNAL SRAM (XMEM)");
@@ -1283,18 +1275,18 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             RichText::new("  (size and pins depend on MCU — shown after assemble.)")
                 .monospace()
                 .size(10.0)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         ui.add_space(6.0);
         section_label(ui, "SRAM  0x???? – 0x????  (??? bytes)");
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("SP →").monospace().size(12.0).color(FOCUS));
+            ui.label(RichText::new("SP →").monospace().size(12.0).color(theme::focus()));
             ui.label(
                 RichText::new("???")
                     .monospace()
                     .size(12.0)
-                    .color(START_GREEN_DIM),
+                    .color(theme::start_green_dim()),
             );
         });
         ui.add_space(4.0);
@@ -1302,33 +1294,33 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             .num_columns(10)
             .spacing([5.0, 1.5])
             .show(ui, |ui| {
-                ui.label(RichText::new("ADDR").monospace().size(11.0).color(START_GREEN_DIM));
+                ui.label(RichText::new("ADDR").monospace().size(11.0).color(theme::start_green_dim()));
                 for col in 0..8usize {
                     ui.label(
                         RichText::new(format!("+{col:X}"))
                             .monospace()
                             .size(11.0)
-                            .color(START_GREEN_DIM),
+                            .color(theme::start_green_dim()),
                     );
                 }
-                ui.label(RichText::new("").monospace().size(11.0).color(DIM));
+                ui.label(RichText::new("").monospace().size(11.0).color(theme::dim_gray()));
                 ui.end_row();
                 for _ in 0..12 {
                     ui.label(
                         RichText::new("????")
                             .monospace()
                             .size(11.0)
-                            .color(START_GREEN_DIM),
+                            .color(theme::start_green_dim()),
                     );
                     for _ in 0..8 {
                         ui.label(
                             RichText::new("??")
                                 .monospace()
                                 .size(11.0)
-                                .color(DIM),
+                                .color(theme::dim_gray()),
                         );
                     }
-                    ui.label(RichText::new("").monospace().size(11.0).color(DIM));
+                    ui.label(RichText::new("").monospace().size(11.0).color(theme::dim_gray()));
                     ui.end_row();
                 }
             });
@@ -1340,7 +1332,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
                 RichText::new("   ???  ?? ?? ?? ?? ?? ?? ?? ??")
                     .monospace()
                     .size(10.5)
-                    .color(START_GREEN_DIM),
+                    .color(theme::start_green_dim()),
             );
         }
         return SimAction::None;
@@ -1369,7 +1361,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
              multiplexed bus. Hardware pins are assigned automatically; no DDR \
              configuration is required or possible for these pins.",
         )
-        .monospace().size(10.0).color(DIM),
+        .monospace().size(10.0).color(theme::dim_gray()),
     );
         ui.add_space(6.0);
 
@@ -1379,17 +1371,17 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         let input_ok = parsed_size.is_some();
 
         ui.horizontal(|ui| {
-        ui.label(RichText::new("Size:").monospace().size(11.0).color(START_GREEN_DIM));
+        ui.label(RichText::new("Size:").monospace().size(11.0).color(theme::start_green_dim()));
         let resp = ui.add(
             TextEdit::singleline(&mut xmem.size_text)
                 .desired_width(72.0)
                 .font(egui::TextStyle::Monospace),
         );
-        ui.label(RichText::new("bytes").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new("bytes").monospace().size(11.0).color(theme::dim_gray()));
         ui.add_space(4.0);
         ui.label(
             RichText::new(format!("(max {})", XMEM_MAX))
-                .monospace().size(10.0).color(DIM),
+                .monospace().size(10.0).color(theme::dim_gray()),
         );
         let _ = resp;
         });
@@ -1397,7 +1389,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         if !input_ok && !xmem.size_text.trim().is_empty() {
         ui.label(
             RichText::new(format!("✗ must be 1–{XMEM_MAX}"))
-                .monospace().size(10.5).color(ERR_RED),
+                .monospace().size(10.5).color(theme::err_red()),
         );
         }
 
@@ -1407,18 +1399,18 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         let can_enable = input_ok;
         if ui.add_enabled(
             can_enable,
-            Button::new(RichText::new("ENABLE XMEM").monospace().size(11.0).color(START_GREEN))
+            Button::new(RichText::new("ENABLE XMEM").monospace().size(11.0).color(theme::start_green()))
                 .fill(if xmem_active {
-                    theme::SIM_SURFACE_LIFT
+                    theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift())
                 } else {
-                    theme::SIM_SURFACE
+                    theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface())
                 })
                 .stroke(Stroke::new(
                     1.0,
                     if xmem_active {
-                        theme::SIM_BORDER_BRIGHT
+                        theme::sim_border_bright()
                     } else {
-                        theme::SIM_BORDER
+                        theme::sim_border()
                     },
                 ))
                 .corner_radius(CornerRadius::same(5)),
@@ -1427,9 +1419,9 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         }
         ui.add_space(6.0);
         if ui.add(
-            Button::new(RichText::new("DISABLE").monospace().size(11.0).color(START_GREEN_DIM))
-                .fill(theme::SIM_SURFACE)
-                .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+            Button::new(RichText::new("DISABLE").monospace().size(11.0).color(theme::start_green_dim()))
+                .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface()))
+                .stroke(Stroke::new(0.75, theme::sim_border()))
                 .corner_radius(CornerRadius::same(5)),
         ).clicked() {
             action = SimAction::SetXmem(0);
@@ -1438,7 +1430,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             ui.add_space(8.0);
             ui.label(
                 RichText::new(format!("ACTIVE  {xmem_size} B  (0x{xmem_base:04X}–0x{:04X})", xmem_base + xmem_size - 1))
-                    .monospace().size(11.0).color(FOCUS),
+                    .monospace().size(11.0).color(theme::focus()),
             );
         }
         });
@@ -1453,28 +1445,28 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         ui.add_space(2.0);
         ui.label(
             RichText::new("PG0=/RD  PG1=/WR  PG2=ALE")
-                .monospace().size(11.0).color(START_GREEN_DIM),
+                .monospace().size(11.0).color(theme::start_green_dim()),
         );
         ui.label(
             RichText::new("PA0–PA7 = XAD0–XAD7   (data + lower address, always)")
-                .monospace().size(11.0).color(START_GREEN_DIM),
+                .monospace().size(11.0).color(theme::start_green_dim()),
         );
         if portc_n == 0 {
             ui.label(
                 RichText::new("Port C: free  (size ≤ 256 B, upper address not needed)")
-                    .monospace().size(11.0).color(DIM),
+                    .monospace().size(11.0).color(theme::dim_gray()),
             );
         } else {
             let pc_hi = portc_n - 1;
             ui.label(
                 RichText::new(format!("PC0–PC{pc_hi} = XA8–XA{}   (upper address)", 7 + portc_n))
-                    .monospace().size(11.0).color(START_GREEN_DIM),
+                    .monospace().size(11.0).color(theme::start_green_dim()),
             );
             if portc_n < 8 {
                 let free_lo = portc_n;
                 ui.label(
                     RichText::new(format!("PC{free_lo}–PC7: free  ({} pins)", 8 - portc_n))
-                        .monospace().size(11.0).color(DIM),
+                        .monospace().size(11.0).color(theme::dim_gray()),
                 );
             }
         }
@@ -1495,19 +1487,19 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             if conflict_a {
                 ui.label(
                     RichText::new(format!("⚠ DDRA=0x{ddra:02X}: Port A pins set as GPIO output — XMEM takes priority"))
-                        .monospace().size(10.5).color(ERR_RED),
+                        .monospace().size(10.5).color(theme::err_red()),
                 );
             }
             if conflict_c {
                 ui.label(
                     RichText::new(format!("⚠ DDRC=0x{ddrc:02X}: Port C pins PC0–PC{} conflict with XA8–XA{}", portc_n-1, 7+portc_n))
-                        .monospace().size(10.5).color(ERR_RED),
+                        .monospace().size(10.5).color(theme::err_red()),
                 );
             }
             if conflict_g {
                 ui.label(
                     RichText::new(format!("⚠ DDRG=0x{ddrg:02X}: PG0–PG2 (/RD,/WR,ALE) conflict with GPIO output"))
-                        .monospace().size(10.5).color(ERR_RED),
+                        .monospace().size(10.5).color(theme::err_red()),
                 );
             }
         }
@@ -1523,10 +1515,10 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
     ui.add_space(4.0);
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("SP →").monospace().size(12.0).color(FOCUS));
+        ui.label(RichText::new("SP →").monospace().size(12.0).color(theme::focus()));
         ui.label(
             RichText::new(format!("0x{sp:04X}"))
-                .monospace().size(12.0).color(START_GREEN),
+                .monospace().size(12.0).color(theme::start_green()),
         );
         let sp_in_sram = sp >= ram_start && sp <= ram_end;
         if sp_in_sram {
@@ -1534,12 +1526,12 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             ui.add_space(8.0);
             ui.label(
                 RichText::new(format!("(stack depth: {depth} B)"))
-                    .monospace().size(11.0).color(START_GREEN_DIM),
+                    .monospace().size(11.0).color(theme::start_green_dim()),
             );
         } else if sp == 0x0000 {
             ui.add_space(8.0);
             ui.label(
-                RichText::new("(uninitialized)").monospace().size(11.0).color(DIM),
+                RichText::new("(uninitialized)").monospace().size(11.0).color(theme::dim_gray()),
             );
         }
     });
@@ -1561,14 +1553,14 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         .spacing([5.0, 1.5])
         .show(ui, |ui| {
             // header
-            ui.label(RichText::new("ADDR").monospace().size(11.0).color(START_GREEN_DIM));
+            ui.label(RichText::new("ADDR").monospace().size(11.0).color(theme::start_green_dim()));
             for col in 0..8usize {
                 ui.label(
                     RichText::new(format!("+{col:X}"))
-                        .monospace().size(11.0).color(START_GREEN_DIM),
+                        .monospace().size(11.0).color(theme::start_green_dim()),
                 );
             }
-            ui.label(RichText::new("").monospace().size(11.0).color(DIM)); // mark_hdr
+            ui.label(RichText::new("").monospace().size(11.0).color(theme::dim_gray())); // mark_hdr
             ui.end_row();
 
             // data_rows
@@ -1585,11 +1577,11 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
                 if all0 && row > 0 && !is_sp_row {
                     if !skipping {
                         skipping = true;
-                        ui.label(RichText::new("  ···").monospace().size(10.5).color(DIM));
+                        ui.label(RichText::new("  ···").monospace().size(10.5).color(theme::dim_gray()));
                         for _ in 0..8 {
-                            ui.label(RichText::new("··").monospace().size(10.5).color(DIM));
+                            ui.label(RichText::new("··").monospace().size(10.5).color(theme::dim_gray()));
                         }
-                        ui.label(RichText::new("").monospace().size(10.5).color(DIM));
+                        ui.label(RichText::new("").monospace().size(10.5).color(theme::dim_gray()));
                         ui.end_row();
                     }
                     continue;
@@ -1597,7 +1589,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
                 skipping = false;
 
                 // addr_col
-                let addr_color = if is_sp_row { FOCUS } else { START_GREEN_DIM };
+                let addr_color = if is_sp_row { theme::focus() } else { theme::start_green_dim() };
                 ui.label(
                     RichText::new(format!("{addr:04X}"))
                         .monospace().size(11.0).color(addr_color),
@@ -1607,9 +1599,9 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
                 for (col_idx, &b) in slice.iter().enumerate() {
                     let byte_addr = addr + col_idx as u32;
                     let is_sp_byte = byte_addr == sp as u32;
-                    let color = if is_sp_byte { FOCUS }
-                                else if b != 0 { START_GREEN }
-                                else { DIM };
+                    let color = if is_sp_byte { theme::focus() }
+                                else if b != 0 { theme::start_green() }
+                                else { theme::dim_gray() };
                     ui.label(
                         RichText::new(format!("{b:02X}"))
                             .monospace().size(11.0).color(color),
@@ -1620,10 +1612,10 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
                 if is_sp_row {
                     ui.label(
                         RichText::new(format!("\u{2190} SP {:04X}", sp))
-                            .monospace().size(10.5).color(FOCUS),
+                            .monospace().size(10.5).color(theme::focus()),
                     );
                 } else {
-                    ui.label(RichText::new("").monospace().size(11.0).color(DIM));
+                    ui.label(RichText::new("").monospace().size(11.0).color(theme::dim_gray()));
                 }
                 ui.end_row();
             }
@@ -1639,7 +1631,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
 
         ui.label(
             RichText::new("  ADDR    +0   +1   +2   +3   +4   +5   +6   +7")
-                .monospace().size(10.5).color(START_GREEN_DIM),
+                .monospace().size(10.5).color(theme::start_green_dim()),
         );
         ui.add_space(2.0);
 
@@ -1653,7 +1645,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             if all0 && row > 0 {
                 if !skipping {
                     skipping = true;
-                    ui.label(RichText::new("  ···").monospace().size(10.5).color(DIM));
+                    ui.label(RichText::new("  ···").monospace().size(10.5).color(theme::dim_gray()));
                 }
                 continue;
             }
@@ -1661,7 +1653,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             let addr = xmem_base + base as u32;
             let mut line = format!("  0x{addr:04X}  ");
             for b in slice { line.push_str(&format!(" {b:02X}  ")); }
-            ui.label(RichText::new(line).monospace().size(10.5).color(START_GREEN));
+            ui.label(RichText::new(line).monospace().size(10.5).color(theme::start_green()));
         }
     }
 
@@ -1674,7 +1666,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
         ui.add_space(2.0);
         ui.label(
             RichText::new("  Persists across reset. Unprogrammed bytes = 0xFF.")
-                .size(11.0).color(START_GREEN_DIM),
+                .size(11.0).color(theme::start_green_dim()),
         );
         ui.add_space(4.0);
 
@@ -1684,7 +1676,7 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
 
         ui.label(
             RichText::new("  ADDR    +0   +1   +2   +3   +4   +5   +6   +7")
-                .monospace().size(10.5).color(START_GREEN_DIM),
+                .monospace().size(10.5).color(theme::start_green_dim()),
         );
         ui.add_space(2.0);
 
@@ -1696,14 +1688,14 @@ fn show_sram_tab(ui: &mut Ui, cpu: &Cpu, xmem: &mut XmemState, board_known: bool
             if all_ff {
                 if !skipping {
                     skipping = true;
-                    ui.label(RichText::new("  ···").monospace().size(10.5).color(DIM));
+                    ui.label(RichText::new("  ···").monospace().size(10.5).color(theme::dim_gray()));
                 }
                 continue;
             }
             skipping = false;
             let mut line = format!("  0x{base:03X}   ");
             for b in slice { line.push_str(&format!(" {b:02X}  ")); }
-            ui.label(RichText::new(line).monospace().size(10.5).color(FOCUS));
+            ui.label(RichText::new(line).monospace().size(10.5).color(theme::focus()));
         }
     }
 
@@ -1722,10 +1714,10 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
     section_label(ui, "STACK POINTER");
     ui.add_space(4.0);
     Grid::new("sp_grid").num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
-        ui.label(RichText::new(format!("SPH  0x{sph:02X}")).monospace().size(13.0).color(FOCUS));
-        ui.label(RichText::new(format!("SPL  0x{spl:02X}")).monospace().size(13.0).color(FOCUS));
+        ui.label(RichText::new(format!("SPH  0x{sph:02X}")).monospace().size(13.0).color(theme::focus()));
+        ui.label(RichText::new(format!("SPL  0x{spl:02X}")).monospace().size(13.0).color(theme::focus()));
         ui.label(
-            RichText::new(format!("SP = 0x{sp:04X}")).monospace().size(13.0).color(START_GREEN),
+            RichText::new(format!("SP = 0x{sp:04X}")).monospace().size(13.0).color(theme::start_green()),
         );
         ui.end_row();
     });
@@ -1735,21 +1727,21 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
     let depth = if sp < ramend { ramend - sp } else { 0 };
 
     if sp == 0 {
-        ui.label(RichText::new("SP not initialized (0x0000)").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new("SP not initialized (0x0000)").monospace().size(11.0).color(theme::dim_gray()));
     } else if stack_top > ramend {
-        ui.label(RichText::new("Stack empty (SP = RAMEND)").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new("Stack empty (SP = RAMEND)").monospace().size(11.0).color(theme::dim_gray()));
     } else {
         ui.label(
             RichText::new(format!("Stack depth: {depth} bytes  (0x{stack_top:04X} – 0x{ramend:04X})"))
-                .monospace().size(11.5).color(START_GREEN_DIM),
+                .monospace().size(11.5).color(theme::start_green_dim()),
         );
     }
 
     ui.add_space(6.0);
     if ui.add(
-        Button::new(RichText::new("STACK FRAMES").monospace().size(11.5).color(START_GREEN))
-            .fill(theme::SIM_SURFACE_LIFT)
-            .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+        Button::new(RichText::new("STACK FRAMES").monospace().size(11.5).color(theme::start_green()))
+            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+            .stroke(Stroke::new(1.0, theme::sim_border_bright()))
             .corner_radius(CornerRadius::same(5)),
     ).clicked() {
         s.popup_open = true;
@@ -1763,12 +1755,12 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
     ui.add_space(4.0);
 
     if depth == 0 || sp == 0 {
-        ui.label(RichText::new("(empty)").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new("(empty)").monospace().size(11.0).color(theme::dim_gray()));
     } else {
         // header
         ui.label(
             RichText::new("  ADDR    +0   +1   +2   +3   +4   +5   +6   +7")
-                .monospace().size(10.5).color(START_GREEN_DIM),
+                .monospace().size(10.5).color(theme::start_green_dim()),
         );
         ui.add_space(2.0);
 
@@ -1782,7 +1774,7 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
             let row_base = row * row_width;
             let sp_row = sp >= row_base as u16 && (sp as usize) < row_base + row_width
                          && sp >= ram_start;
-            let color_row = if sp_row { FOCUS } else { START_GREEN };
+            let color_row = if sp_row { theme::focus() } else { theme::start_green() };
 
             let mut line = format!("  0x{row_base:04X}  ");
             let mut has_content = false;
@@ -1818,8 +1810,8 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
             .title_bar(false)
             .frame(
                 Frame::NONE
-                    .fill(theme::PANEL_DEEP)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+                    .stroke(Stroke::new(1.0, theme::sim_border()))
                     .inner_margin(Margin::same(14)),
             )
             .fixed_size([480.0, 420.0])
@@ -1828,10 +1820,10 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("[ STACK FRAME ANALYSIS ]")
-                            .monospace().size(13.0).color(START_GREEN),
+                            .monospace().size(13.0).color(theme::start_green()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button(RichText::new("✕").monospace().size(13.0).color(FOCUS))
+                        if ui.button(RichText::new("✕").monospace().size(13.0).color(theme::focus()))
                             .clicked()
                         {
                             s.popup_open = false;
@@ -1842,18 +1834,18 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Heuristic: 2-byte pairs that form a valid flash word address are marked as potential return addresses.")
-                        .monospace().size(10.0).color(DIM),
+                        .monospace().size(10.0).color(theme::dim_gray()),
                 );
                 ui.add_space(6.0);
 
                 if depth == 0 || sp == 0 {
-                    ui.label(RichText::new("Stack is empty.").monospace().size(11.0).color(DIM));
+                    ui.label(RichText::new("Stack is empty.").monospace().size(11.0).color(theme::dim_gray()));
                     return;
                 }
 
                 ui.label(
                     RichText::new(format!("{:<6} {:<6} {:<22} {}", "ADDR", "BYTES", "INTERPRETATION", "DISASM"))
-                        .monospace().size(11.0).color(START_GREEN_DIM),
+                        .monospace().size(11.0).color(theme::start_green_dim()),
                 );
                 ui.separator();
 
@@ -1879,11 +1871,11 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
                                         RichText::new(format!(
                                             "0x{addr:04X}  {lo:02X} {hi:02X}  → RET 0x{word_addr:04X}"
                                         ))
-                                        .monospace().size(10.5).color(FOCUS),
+                                        .monospace().size(10.5).color(theme::focus()),
                                     );
                                     ui.label(
                                         RichText::new(format!("  {disasm} [{cyc}cy]"))
-                                            .monospace().size(10.5).color(START_GREEN_DIM),
+                                            .monospace().size(10.5).color(theme::start_green_dim()),
                                     );
                                 });
                                 addr += 2;
@@ -1897,7 +1889,7 @@ fn show_stack_tab(ui: &mut Ui, cpu: &Cpu, s: &mut StackState) -> SimAction {
                             RichText::new(format!(
                                 "0x{addr:04X}  {b:02X}      PUSH'd byte  {b:3}{note}"
                             ))
-                            .monospace().size(10.5).color(START_GREEN),
+                            .monospace().size(10.5).color(theme::start_green()),
                         );
                         addr += 1;
                     }
@@ -1915,14 +1907,14 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
 
     // new breakpoint
     Frame::NONE
-        .stroke(Stroke::new(1.0, DIM))
+        .stroke(Stroke::new(1.0, theme::dim_gray()))
         .inner_margin(Margin::same(6))
         .show(ui, |ui| {
-            ui.label(RichText::new("NEW BREAKPOINT").monospace().size(11.0).color(START_GREEN_DIM));
+            ui.label(RichText::new("NEW BREAKPOINT").monospace().size(11.0).color(theme::start_green_dim()));
             ui.add_space(4.0);
 
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Addr (hex):").monospace().size(11.0).color(DIM));
+                ui.label(RichText::new("Addr (hex):").monospace().size(11.0).color(theme::dim_gray()));
                 ui.add(
                     egui::TextEdit::singleline(&mut bp.new_addr_text)
                         .desired_width(56.0)
@@ -1931,13 +1923,13 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
             });
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Action:").monospace().size(11.0).color(DIM));
-                egui::ComboBox::from_id_salt("bp_action")
+                ui.label(RichText::new("Action:").monospace().size(11.0).color(theme::dim_gray()));
+                theme::combo_box("bp_action")
                     .selected_text(
-                        RichText::new(bp.new_action.label()).monospace().size(11.0).color(START_GREEN),
+                        RichText::new(bp.new_action.label()).monospace().size(11.0).color(theme::start_green()),
                     )
                     .show_ui(ui, |ui| {
-                        ui.style_mut().visuals.override_text_color = Some(START_GREEN);
+                        ui.style_mut().visuals.override_text_color = Some(theme::start_green());
                         for a in [BpAction::Pause, BpAction::PrintTerm, BpAction::PrintAndPause] {
                             ui.selectable_value(
                                 &mut bp.new_action, a,
@@ -1949,7 +1941,7 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
             if bp.new_action != BpAction::Pause {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Message:").monospace().size(11.0).color(DIM));
+                    ui.label(RichText::new("Message:").monospace().size(11.0).color(theme::dim_gray()));
                     ui.add(
                         egui::TextEdit::singleline(&mut bp.new_message)
                             .desired_width(150.0)
@@ -1959,9 +1951,9 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
             }
             ui.add_space(4.0);
             if ui.add(
-                Button::new(RichText::new("ADD").monospace().size(11.5).color(START_GREEN))
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+                Button::new(RichText::new("ADD").monospace().size(11.5).color(theme::start_green()))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright()))
                     .corner_radius(CornerRadius::same(5)),
             ).clicked() {
                 let addr_str = bp.new_addr_text.trim().trim_start_matches("0x");
@@ -1986,7 +1978,7 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
 
     // bp list
     if bp.breakpoints.is_empty() {
-        ui.label(RichText::new("  (none)").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new("  (none)").monospace().size(11.0).color(theme::dim_gray()));
         return;
     }
 
@@ -1994,7 +1986,7 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
     for (i, b) in bp.breakpoints.iter_mut().enumerate() {
         ui.horizontal(|ui| {
             ui.checkbox(&mut b.enabled, "");
-            let addr_col = if b.enabled { FOCUS } else { DIM };
+            let addr_col = if b.enabled { theme::focus() } else { theme::dim_gray() };
             ui.label(
                 RichText::new(format!("0x{:04X}", b.addr))
                     .monospace().size(11.5).color(addr_col),
@@ -2002,18 +1994,18 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(b.action.label())
-                    .monospace().size(10.5).color(START_GREEN_DIM),
+                    .monospace().size(10.5).color(theme::start_green_dim()),
             );
             if !b.message.is_empty() {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!("\"{}\"", b.message))
-                        .monospace().size(10.5).color(DIM),
+                        .monospace().size(10.5).color(theme::dim_gray()),
                 );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button(
-                    RichText::new("✕").monospace().size(11.0).color(ERR_RED)
+                    RichText::new("✕").monospace().size(11.0).color(theme::err_red())
                 ).clicked() {
                     to_remove = Some(i);
                 }
@@ -2025,9 +2017,9 @@ fn show_break_tab(ui: &mut Ui, bp: &mut BreakpointState) {
     ui.add_space(6.0);
     if !bp.breakpoints.is_empty() {
         if ui.add(
-            Button::new(RichText::new("CLEAR ALL").monospace().size(10.5).color(START_GREEN_DIM))
+            Button::new(RichText::new("CLEAR ALL").monospace().size(10.5).color(theme::start_green_dim()))
                 .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+                .stroke(Stroke::new(0.75, theme::sim_border()))
                 .corner_radius(CornerRadius::same(5)),
         ).clicked() {
             bp.breakpoints.clear();
@@ -2047,14 +2039,14 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
             RichText::new("  Assemble with a `.board` line to show flash bounds, paging, and disassembly.")
                 .monospace()
                 .size(10.5)
-                .color(DIM),
+                .color(theme::dim_gray()),
         );
         ui.add_space(6.0);
         ui.label(
             RichText::new("   ADDR  WORDS         DISASM")
                 .monospace()
                 .size(11.0)
-                .color(START_GREEN_DIM),
+                .color(theme::start_green_dim()),
         );
         ui.separator();
         ui.add_space(2.0);
@@ -2063,7 +2055,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
                 RichText::new("   ???  ??? ???  ???")
                     .monospace()
                     .size(12.0)
-                    .color(START_GREEN_DIM),
+                    .color(theme::start_green_dim()),
             );
         }
         return;
@@ -2098,7 +2090,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
         if s.page >= 5 && s.page < flash_total_pages.saturating_sub(1) {
             ui.label(
                 RichText::new(format!("[{}]", s.page + 1))
-                    .monospace().size(11.0).color(FOCUS),
+                    .monospace().size(11.0).color(theme::focus()),
             );
             ui.add_space(2.0);
         }
@@ -2140,7 +2132,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
     // col header
     ui.label(
         RichText::new("   ADDR  WORDS         DISASM")
-            .monospace().size(11.0).color(START_GREEN_DIM),
+            .monospace().size(11.0).color(theme::start_green_dim()),
     );
     ui.separator();
     ui.add_space(2.0);
@@ -2179,7 +2171,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
             let count = addr - start;
             ui.label(
                 RichText::new(format!("   ···  ({count} empty words)"))
-                    .monospace().size(10.5).color(DIM),
+                    .monospace().size(10.5).color(theme::dim_gray()),
             );
         }
 
@@ -2194,7 +2186,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
         let ivt    = cpu.ivt_name(addr)
             .map(|n| format!("  ; <{n}>"))
             .unwrap_or_default();
-        let (color, size) = if is_pc { (FOCUS, 12.5_f32) } else { (START_GREEN, 12.0_f32) };
+        let (color, size) = if is_pc { (theme::focus(), 12.5_f32) } else { (theme::start_green(), 12.0_f32) };
 
         ui.label(
             RichText::new(format!("{arrow}  {addr:04X}  {words_str}  {disasm}{ivt}"))
@@ -2210,7 +2202,7 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
         if count > 0 {
             ui.label(
                 RichText::new(format!("   ···  ({count} empty words)"))
-                    .monospace().size(10.5).color(DIM),
+                    .monospace().size(10.5).color(theme::dim_gray()),
             );
         }
     }
@@ -2218,16 +2210,16 @@ fn show_flash_tab(ui: &mut Ui, cpu: &Cpu, s: &mut FlashState, board_known: bool)
 
 // format helper
 fn flash_page_btn(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
-    let color = if selected { FOCUS } else { START_GREEN_DIM };
+    let color = if selected { theme::focus() } else { theme::start_green_dim() };
     let fill = if selected {
-        theme::SIM_TAB_ACTIVE
+        theme::panel_over_wallpaper(ui.ctx(), theme::sim_tab_active())
     } else {
-        theme::SIM_SURFACE
+        theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface())
     };
     let stroke_col = if selected {
-        theme::SIM_BORDER_BRIGHT
+        theme::sim_border_bright()
     } else {
-        theme::SIM_BORDER
+        theme::sim_border()
     };
     let sw = if selected { 1.0 } else { 0.75 };
     ui.add(
@@ -2239,33 +2231,33 @@ fn flash_page_btn(ui: &mut Ui, label: &str, selected: bool) -> egui::Response {
 }
 
 fn section_label(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).monospace().size(11.0).color(START_GREEN_DIM));
+    ui.label(RichText::new(text).monospace().size(11.0).color(theme::start_green_dim()));
 }
 
 fn timer_section(ui: &mut Ui, name: &str, detail: &str) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(name).monospace().size(12.0).color(START_GREEN));
+        ui.label(RichText::new(name).monospace().size(12.0).color(theme::start_green()));
         ui.add_space(4.0);
-        ui.label(RichText::new(detail).monospace().size(11.0).color(START_GREEN_DIM));
+        ui.label(RichText::new(detail).monospace().size(11.0).color(theme::start_green_dim()));
     });
     ui.add_space(2.0);
 }
 
 /// kv_row grid helper
 fn kv3(ui: &mut Ui, key: &str, val: &str, ann: &str) {
-    ui.label(RichText::new(key).monospace().size(11.0).color(START_GREEN_DIM));
+    ui.label(RichText::new(key).monospace().size(11.0).color(theme::start_green_dim()));
     let vcolor = if val.trim_start_matches('0').is_empty() || val == "0000" || val == "00" {
-        DIM
+        theme::dim_gray()
     } else {
-        FOCUS
+        theme::focus()
     };
     ui.label(RichText::new(val).monospace().size(11.0).color(vcolor));
-    ui.label(RichText::new(ann).monospace().size(11.0).color(DIM));
+    ui.label(RichText::new(ann).monospace().size(11.0).color(theme::dim_gray()));
     ui.end_row();
 }
 
 fn flag_lbl(ui: &mut Ui, name: &str, set: bool) {
-    let color = if set { FOCUS } else { DIM };
+    let color = if set { theme::focus() } else { theme::dim_gray() };
     ui.label(
         RichText::new(format!("{name}:{}", u8::from(set)))
             .monospace().size(11.0).color(color),
@@ -2297,8 +2289,8 @@ fn sim_big_btn(ui: &mut Ui, label: &str) -> egui::Response {
                 .size(12.0)
                 .color(Color32::BLACK),
         )
-        .fill(START_GREEN_DIM)
-        .stroke(Stroke::new(1.0, START_GREEN)),
+        .fill(theme::start_green_dim())
+        .stroke(Stroke::new(1.0, theme::start_green())),
     )
 }
 

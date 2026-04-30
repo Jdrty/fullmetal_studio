@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use crate::avr::cpu::Cpu;
 use crate::avr::McuModel;
 use crate::theme;
-const ERR_RED_SOFT: Color32 = Color32::from_rgb(200, 120, 120);
 
 /// stored under each project folder
 const PERIPHERALS_REL_PATH: &str = ".full_metal/peripherals.json";
@@ -106,10 +105,6 @@ pub(crate) fn persist_peripherals_if_needed(state: &mut PeripheralState, project
         }
     }
 }
-
-const ADD_CIRCLE_FILL: Color32 = Color32::from_rgb(22, 26, 36);
-const ADD_CIRCLE_RIM: Color32 = Color32::from_rgb(55, 62, 78);
-const ADD_CIRCLE_INNER: Color32 = Color32::from_rgb(16, 19, 28);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -312,10 +307,11 @@ fn tint(c: Color32, a: u8) -> Color32 {
 }
 
 fn paint_glowing_plus(painter: &egui::Painter, center: Pos2, half: f32) {
+    let a = theme::accent();
     let layers: [(f32, u8); 4] = [(4.0, 18), (2.5, 45), (1.2, 110), (0.0, 255)];
     for (spread, alpha) in layers {
         let w = 2.2 + spread * 0.15;
-        let c = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
+        let c = Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), alpha);
         let s = Stroke::new(w, c);
         painter.line_segment(
             [pos2(center.x - half, center.y), pos2(center.x + half, center.y)],
@@ -341,25 +337,26 @@ fn circle_add_button(ui: &mut Ui, state: &mut PeripheralState) -> egui::Response
     let r = size * 0.46;
 
     p.circle_filled(c, r + 1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 45));
-    p.circle_filled(c, r, ADD_CIRCLE_FILL);
-    p.circle_stroke(c, r, Stroke::new(1.0, ADD_CIRCLE_RIM));
-    p.circle_stroke(c, r - 2.0, Stroke::new(0.65, ADD_CIRCLE_INNER));
+    p.circle_filled(c, r, theme::button_fill_strong());
+    p.circle_stroke(c, r, Stroke::new(1.0, theme::sim_border_bright()));
+    p.circle_stroke(c, r - 2.0, Stroke::new(0.65, theme::panel_deep()));
     if response.hovered() {
         p.circle_stroke(
             c,
             r + 1.5,
             Stroke::new(
                 1.0,
-                Color32::from_rgba_unmultiplied(theme::FOCUS.r(), theme::FOCUS.g(), theme::FOCUS.b(), 90),
+                Color32::from_rgba_unmultiplied(theme::focus().r(), theme::focus().g(), theme::focus().b(), 90),
             ),
         );
     }
+    let ad = theme::accent_dim();
     p.line_segment(
         [
             pos2(c.x - r * 0.52, c.y - r * 0.62),
             pos2(c.x + r * 0.52, c.y - r * 0.62),
         ],
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 42)),
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(ad.r(), ad.g(), ad.b(), 100)),
     );
     paint_glowing_plus(&p, c, r * 0.3);
 
@@ -370,8 +367,8 @@ fn circle_add_button(ui: &mut Ui, state: &mut PeripheralState) -> egui::Response
 
 fn add_peripheral_chip(ui: &mut Ui, state: &mut PeripheralState) {
     Frame::NONE
-        .fill(theme::SIM_SURFACE)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .corner_radius(CornerRadius::same(20))
         .inner_margin(Margin::same(5))
         .show(ui, |ui| {
@@ -385,12 +382,17 @@ fn paint_tactile_button_icon(painter: &egui::Painter, rect: Rect, pressed: bool)
     let face = body.translate(vec2(0.0, off));
     let plunger = face.shrink2(vec2(10.0, 8.0)).translate(vec2(0.0, 1.0 + off * 0.5));
 
-    let shadow = Color32::from_rgb(12, 14, 20);
-    let bezel = Color32::from_rgb(28, 32, 42);
-    let face_col = Color32::from_rgb(38, 44, 56);
-    let plunger_top = Color32::from_rgb(58, 64, 78);
-    let plunger_bot = Color32::from_rgb(32, 36, 46);
-    let hi = Color32::from_rgba_unmultiplied(255, 255, 255, 40);
+    let shadow   = theme::panel_deep();
+    let bezel    = theme::panel_mid();
+    let face_col = theme::sim_surface_lift();
+    let plunger_top = theme::sim_border_bright();
+    let plunger_bot = theme::button_fill_strong();
+    let hi = Color32::from_rgba_unmultiplied(
+        theme::text_primary().r(),
+        theme::text_primary().g(),
+        theme::text_primary().b(),
+        40,
+    );
 
     painter.rect_filled(rect, CornerRadius::same(6), shadow);
     painter.rect_filled(body, CornerRadius::same(5), bezel);
@@ -402,10 +404,19 @@ fn paint_tactile_button_icon(painter: &egui::Painter, rect: Rect, pressed: bool)
     painter.rect_filled(plunger, CornerRadius::same(3), plunger_bot);
     let plunger_inset = plunger.shrink(1.0);
     painter.rect_filled(plunger_inset, CornerRadius::same(2), plunger_top);
+    let tp = theme::text_primary();
     if pressed {
-        painter.circle_filled(plunger.center(), 2.8, Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+        painter.circle_filled(
+            plunger.center(),
+            2.8,
+            Color32::from_rgba_unmultiplied(tp.r(), tp.g(), tp.b(), 25),
+        );
     } else {
-        painter.circle_filled(plunger.center() + vec2(-0.8, -0.8), 2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 70));
+        painter.circle_filled(
+            plunger.center() + vec2(-0.8, -0.8),
+            2.0,
+            Color32::from_rgba_unmultiplied(tp.r(), tp.g(), tp.b(), 70),
+        );
     }
 }
 
@@ -416,9 +427,13 @@ fn paint_panel_pot_icon(painter: &egui::Painter, rect: Rect, t: f32) {
     let r_scale = r_outer * 0.92;
     let r_knob = r_outer * 0.55;
 
-    painter.circle_filled(c, r_outer + 3.0, Color32::from_rgb(18, 20, 26));
-    painter.circle_filled(c, r_outer + 1.5, Color32::from_rgb(36, 40, 50));
-    painter.circle_stroke(c, r_outer + 1.5, Stroke::new(1.0, Color32::from_rgb(58, 64, 78)));
+    painter.circle_filled(c, r_outer + 3.0, theme::panel_deep());
+    painter.circle_filled(c, r_outer + 1.5, theme::panel_mid());
+    painter.circle_stroke(
+        c,
+        r_outer + 1.5,
+        Stroke::new(1.0, theme::sim_border_bright()),
+    );
 
     let start = -0.85 * PI;
     let end = 0.85 * PI;
@@ -431,7 +446,7 @@ fn paint_panel_pot_icon(painter: &egui::Painter, rect: Rect, t: f32) {
         let u = i as f32 / steps as f32;
         let a = start + (end - start) * u;
         let pt = pos2(c.x + r_scale * a.cos(), c.y - r_scale * a.sin());
-        painter.line_segment([prev, pt], Stroke::new(1.8, Color32::from_rgb(52, 58, 72)));
+        painter.line_segment([prev, pt], Stroke::new(1.8, theme::sim_border()));
         prev = pt;
     }
 
@@ -445,7 +460,12 @@ fn paint_panel_pot_icon(painter: &egui::Painter, rect: Rect, t: f32) {
                 pos2(c.x + r1 * a.cos(), c.y - r1 * a.sin()),
                 pos2(c.x + r2 * a.cos(), c.y - r2 * a.sin()),
             ],
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(200, 210, 230, 90)),
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(
+                theme::match_cur().r(),
+                theme::match_cur().g(),
+                theme::match_cur().b(),
+                90,
+            )),
         );
     }
 
@@ -458,20 +478,21 @@ fn paint_panel_pot_icon(painter: &egui::Painter, rect: Rect, t: f32) {
                 pos2(c.x + r0 * a.cos(), c.y - r0 * a.sin()),
                 pos2(c.x + r1 * a.cos(), c.y - r1 * a.sin()),
             ],
-            Stroke::new(1.0, Color32::from_rgb(70, 76, 90)),
+            Stroke::new(1.0, theme::dim_gray()),
         );
     }
 
     let ang = start + (end - start) * t;
-    painter.circle_filled(c, r_knob, Color32::from_rgb(48, 52, 64));
-    painter.circle_stroke(c, r_knob, Stroke::new(1.0, Color32::from_rgb(88, 94, 110)));
-    painter.circle_filled(c, r_knob - 2.0, Color32::from_rgb(62, 68, 82));
+    painter.circle_filled(c, r_knob, theme::button_fill_strong());
+    painter.circle_stroke(c, r_knob, Stroke::new(1.0, theme::sim_border_bright()));
+    painter.circle_filled(c, r_knob - 2.0, theme::sim_surface_lift());
+    let tp2 = theme::text_primary();
     painter.line_segment(
         [
             pos2(c.x - r_knob * 0.45, c.y - r_knob * 0.35),
             pos2(c.x - r_knob * 0.1, c.y - r_knob * 0.55),
         ],
-        Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 55)),
+        Stroke::new(1.2, Color32::from_rgba_unmultiplied(tp2.r(), tp2.g(), tp2.b(), 55)),
     );
     let tip = r_knob * 0.72;
     painter.line_segment(
@@ -479,7 +500,7 @@ fn paint_panel_pot_icon(painter: &egui::Painter, rect: Rect, t: f32) {
             c,
             pos2(c.x + tip * ang.cos(), c.y - tip * ang.sin()),
         ],
-        Stroke::new(2.2, theme::ACCENT),
+        Stroke::new(2.2, theme::accent()),
     );
 
     let lug_y = c.y + r_outer * 0.75;
@@ -488,7 +509,7 @@ fn paint_panel_pot_icon(painter: &egui::Painter, rect: Rect, t: f32) {
         painter.rect_filled(
             Rect::from_center_size(lug, vec2(3.5, 2.2)),
             CornerRadius::ZERO,
-            Color32::from_rgb(180, 165, 120),
+            theme::periph_dim(),
         );
     }
 }
@@ -522,7 +543,7 @@ fn interactive_pot_knob(ui: &mut Ui, volts: &mut f32) -> egui::Response {
             icon_side * 0.48 + 3.0,
             Stroke::new(
                 1.0,
-                Color32::from_rgba_unmultiplied(theme::FOCUS.r(), theme::FOCUS.g(), theme::FOCUS.b(), 100),
+                Color32::from_rgba_unmultiplied(theme::focus().r(), theme::focus().g(), theme::focus().b(), 100),
             ),
         );
     }
@@ -535,13 +556,13 @@ fn interactive_pot_knob(ui: &mut Ui, volts: &mut f32) -> egui::Response {
 fn apply_add_dialog_visuals(ui: &mut Ui) {
     let v = ui.visuals_mut();
     let corner = CornerRadius::same(6);
-    let stroke_menu = Stroke::new(1.0, theme::SIM_BORDER);
-    let stroke_hi = Stroke::new(1.0, theme::SIM_BORDER_BRIGHT);
+    let stroke_menu = Stroke::new(1.0, theme::sim_border());
+    let stroke_hi = Stroke::new(1.0, theme::sim_border_bright());
 
-    v.window_fill = theme::SIM_SURFACE_LIFT;
+    v.window_fill = theme::sim_surface_lift();
     v.window_stroke = stroke_menu;
     v.menu_corner_radius = corner;
-    v.extreme_bg_color = theme::SIM_SURFACE_LIFT;
+    v.extreme_bg_color = theme::sim_surface_lift();
     v.popup_shadow = epaint::Shadow {
         offset: [0, 4],
         blur: 18,
@@ -549,9 +570,9 @@ fn apply_add_dialog_visuals(ui: &mut Ui) {
         color: Color32::from_rgba_unmultiplied(0, 0, 0, 110),
     };
 
-    v.selection.bg_fill = theme::SIM_TAB_ACTIVE;
+    v.selection.bg_fill = theme::sim_tab_active();
     // `interact_selectable` uses `selection.stroke` as fg for the selected row.
-    v.selection.stroke = Stroke::new(1.0, theme::ACCENT);
+    v.selection.stroke = Stroke::new(1.0, theme::accent());
 
     let set_w = |w: &mut WidgetVisuals, fill: Color32, fg: Color32, strk: Stroke| {
         w.bg_fill = fill;
@@ -562,31 +583,31 @@ fn apply_add_dialog_visuals(ui: &mut Ui) {
         w.expansion = 0.0;
     };
 
-    set_w(&mut v.widgets.inactive, theme::SIM_SURFACE, theme::ACCENT_DIM, stroke_menu);
-    set_w(&mut v.widgets.hovered, theme::SIM_TAB_ACTIVE, theme::ACCENT, stroke_hi);
-    set_w(&mut v.widgets.active, theme::SIM_TAB_ACTIVE, theme::ACCENT, stroke_hi);
-    set_w(&mut v.widgets.open, theme::SIM_SURFACE_LIFT, theme::ACCENT, stroke_hi);
+    set_w(&mut v.widgets.inactive, theme::sim_surface(), theme::accent_dim(), stroke_menu);
+    set_w(&mut v.widgets.hovered, theme::sim_tab_active(), theme::accent(), stroke_hi);
+    set_w(&mut v.widgets.active, theme::sim_tab_active(), theme::accent(), stroke_hi);
+    set_w(&mut v.widgets.open, theme::sim_surface_lift(), theme::accent(), stroke_hi);
     set_w(
         &mut v.widgets.noninteractive,
-        theme::SIM_SURFACE_LIFT,
-        theme::ACCENT_DIM,
+        theme::sim_surface_lift(),
+        theme::accent_dim(),
         stroke_menu,
     );
 }
 
 fn angelic_dialog_button(ui: &mut Ui, text: &str, primary: bool) -> egui::Response {
     let fill = if primary {
-        tint(theme::ACCENT, 28)
+        tint(theme::accent(), 28)
     } else {
-        theme::SIM_SURFACE
+        theme::sim_surface()
     };
     let stroke = if primary {
-        theme::SIM_BORDER_BRIGHT
+        theme::sim_border_bright()
     } else {
-        theme::SIM_BORDER
+        theme::sim_border()
     };
     ui.add(
-        Button::new(RichText::new(text).monospace().size(12.5).color(theme::ACCENT))
+        Button::new(RichText::new(text).monospace().size(12.5).color(theme::accent()))
             .fill(fill)
             .stroke(Stroke::new(1.0, stroke))
             .corner_radius(CornerRadius::same(6))
@@ -602,8 +623,8 @@ pub fn show_peripherals_panel(
     project_root: Option<&Path>,
 ) {
     Frame::NONE
-        .fill(theme::PANEL_DEEP)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin {
             left:   5,
             right:  10,
@@ -622,7 +643,7 @@ pub fn show_peripherals_panel(
                     RichText::new("Peripherals")
                         .monospace()
                         .size(15.0)
-                        .color(theme::ACCENT),
+                        .color(theme::accent()),
                 );
                 ui.add_space(3.0);
                 ui.label(
@@ -632,7 +653,7 @@ pub fn show_peripherals_panel(
                     .monospace()
                     .size(10.5)
                     .line_height(Some(14.0))
-                    .color(theme::ACCENT_DIM),
+                    .color(theme::accent_dim()),
                 );
             });
 
@@ -675,8 +696,8 @@ pub fn show_peripherals_panel(
                                         Frame::NONE.inner_margin(Margin::ZERO),
                                         |ui| {
                                 Frame::NONE
-                                    .fill(theme::SIM_SURFACE)
-                                    .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+                                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface()))
+                                    .stroke(Stroke::new(0.75, theme::sim_border()))
                                     .inner_margin(Margin {
                                         left:   4,
                                         right:  8,
@@ -709,7 +730,7 @@ pub fn show_peripherals_panel(
                                                                 ))
                                                                 .monospace()
                                                                 .size(11.5)
-                                                                .color(theme::ACCENT_DIM),
+                                                                .color(theme::accent_dim()),
                                                             );
                                                             ui.with_layout(
                                                                 Layout::right_to_left(
@@ -723,7 +744,7 @@ pub fn show_peripherals_panel(
                                                                             )
                                                                             .monospace()
                                                                             .size(10.5)
-                                                                            .color(ERR_RED_SOFT),
+                                                                            .color(theme::err_red_soft()),
                                                                         )
                                                                         .clicked()
                                                                     {
@@ -755,14 +776,14 @@ pub fn show_peripherals_panel(
                                                                     );
 
                                                                     let fill = if e.pressed {
-                                                                        tint(theme::ACCENT, 55)
+                                                                        tint(theme::accent(), 55)
                                                                     } else {
-                                                                        tint(theme::ACCENT, 18)
+                                                                        tint(theme::accent(), 18)
                                                                     };
                                                                     let stroke = if e.pressed {
-                                                                        theme::ACCENT
+                                                                        theme::accent()
                                                                     } else {
-                                                                        theme::SIM_BORDER_BRIGHT
+                                                                        theme::sim_border_bright()
                                                                     };
                                                                     let b = ui.add(
                                                                         Button::new(
@@ -771,7 +792,7 @@ pub fn show_peripherals_panel(
                                                                             )
                                                                             .monospace()
                                                                             .size(12.5)
-                                                                            .color(theme::ACCENT),
+                                                                            .color(theme::accent()),
                                                                         )
                                                                         .fill(fill)
                                                                         .stroke(Stroke::new(
@@ -800,7 +821,7 @@ pub fn show_peripherals_panel(
                                                                         )
                                                                         .monospace()
                                                                         .size(9.5)
-                                                                        .color(theme::ACCENT_DIM),
+                                                                        .color(theme::accent_dim()),
                                                                     );
                                                                     ui.add_space(6.0);
                                                                     ui.label(
@@ -810,7 +831,7 @@ pub fn show_peripherals_panel(
                                                                         ))
                                                                         .monospace()
                                                                         .size(18.0)
-                                                                        .color(theme::ACCENT),
+                                                                        .color(theme::accent()),
                                                                     );
                                                                     ui.add_space(2.0);
                                                                     ui.label(
@@ -819,7 +840,7 @@ pub fn show_peripherals_panel(
                                                                         )
                                                                         .monospace()
                                                                         .size(10.0)
-                                                                        .color(theme::ACCENT_DIM),
+                                                                        .color(theme::accent_dim()),
                                                                     );
                                                                     ui.add_space(8.0);
                                                                     let slider_w = ui
@@ -852,10 +873,10 @@ pub fn show_peripherals_panel(
                                                     ui.set_min_width(DRAG_STRIP_W);
                                                     ui.set_max_width(DRAG_STRIP_W);
                                                     Frame::NONE
-                                                        .fill(theme::PANEL_DEEP)
+                                                        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
                                                         .stroke(Stroke::new(
                                                             0.75,
-                                                            theme::SIM_BORDER,
+                                                            theme::sim_border(),
                                                         ))
                                                         .inner_margin(Margin::symmetric(4, 6))
                                                         .corner_radius(CornerRadius::same(4))
@@ -873,7 +894,7 @@ pub fn show_peripherals_panel(
                                                                             .monospace()
                                                                             .size(16.0)
                                                                             .color(
-                                                                                theme::ACCENT_DIM,
+                                                                                theme::accent_dim(),
                                                                             ),
                                                                     );
                                                                 },
@@ -914,14 +935,14 @@ pub fn show_peripherals_panel(
                                 RichText::new("No peripherals yet")
                                     .monospace()
                                     .size(12.0)
-                                    .color(theme::ACCENT_DIM),
+                                    .color(theme::accent_dim()),
                             );
                             ui.add_space(4.0);
                             ui.label(
                                 RichText::new("Use the round add control at the bottom right of this panel to add a button or potentiometer.")
                                     .monospace()
                                     .size(10.5)
-                                    .color(Color32::from_rgba_unmultiplied(125, 135, 158, 200)),
+                                    .color(theme::accent_dim()),
                             );
                         });
                     }
@@ -945,8 +966,8 @@ pub fn show_peripherals_panel(
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .frame(
                 Frame::NONE
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright()))
                     .inner_margin(Margin::symmetric(20, 18))
                     .corner_radius(CornerRadius::same(12)),
             )
@@ -958,14 +979,14 @@ pub fn show_peripherals_panel(
                         RichText::new("Add peripheral")
                             .monospace()
                             .size(16.0)
-                            .color(theme::ACCENT),
+                            .color(theme::accent()),
                     );
                     ui.add_space(2.0);
                     ui.label(
                         RichText::new("Choose type and pin. Pots use ADC-capable pins only.")
                             .monospace()
                             .size(10.5)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     );
                 });
                 ui.add_space(14.0);
@@ -974,15 +995,15 @@ pub fn show_peripherals_panel(
                     RichText::new("Type")
                         .monospace()
                         .size(10.5)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 );
                 ui.add_space(4.0);
-                egui::ComboBox::from_id_salt("pk_kind")
+                crate::theme::combo_box("pk_kind")
                     .selected_text(
                         RichText::new(state.add_kind.label())
                             .monospace()
                             .size(12.0)
-                            .color(theme::ACCENT),
+                            .color(theme::accent()),
                     )
                     .width(ui.available_width())
                     .show_ui(ui, |ui| {
@@ -1005,23 +1026,23 @@ pub fn show_peripherals_panel(
                         RichText::new("Port")
                             .monospace()
                             .size(10.5)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     );
                     cols[1].label(
                         RichText::new("Pin")
                             .monospace()
                             .size(10.5)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     );
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("pk_port")
+                    crate::theme::combo_box("pk_port")
                         .selected_text(
                             RichText::new(state.add_port.to_string())
                                 .monospace()
                                 .size(12.0)
-                                .color(theme::ACCENT),
+                                .color(theme::accent()),
                         )
                         .width(ui.available_width() * 0.48)
                         .show_ui(ui, |ui| {
@@ -1030,12 +1051,12 @@ pub fn show_peripherals_panel(
                             }
                         });
                     ui.add_space(8.0);
-                    egui::ComboBox::from_id_salt("pk_bit")
+                    crate::theme::combo_box("pk_bit")
                         .selected_text(
                             RichText::new(format!("{}", state.add_bit))
                                 .monospace()
                                 .size(12.0)
-                                .color(theme::ACCENT),
+                                .color(theme::accent()),
                         )
                         .width(ui.available_width())
                         .show_ui(ui, |ui| {
@@ -1051,7 +1072,7 @@ pub fn show_peripherals_panel(
 
                 if let Some(ref err) = state.add_error {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(err).monospace().size(10.5).color(ERR_RED_SOFT));
+                    ui.label(RichText::new(err).monospace().size(10.5).color(theme::err_red_soft()));
                 }
 
                 ui.add_space(18.0);

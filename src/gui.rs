@@ -1,6 +1,6 @@
 //! application shell
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::thread;
 
 use eframe::egui::{
-    self, Align2, Color32, ComboBox, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
-    Frame, Id, Key, Margin, Modifiers, RichText, Stroke, TextStyle, TopBottomPanel, ViewportCommand,
-    Visuals, Window,
+    self, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
+    Frame, Id, Key, LayerId, Margin, Modifiers, RichText, Stroke, TextStyle, TopBottomPanel,
+    ViewportCommand, Window,
 };
 
 use crate::avr::assembler::assemble_for_model;
@@ -22,6 +22,7 @@ use crate::avr::McuModel;
 use crate::avr::Cpu;
 use crate::editor::TextEditor;
 use crate::docs::show_flash_locations_window;
+use crate::cost_helper::{show_cost_helper, CostHelperState};
 use crate::cycle_helper::{show_cycle_helper, CycleHelperState};
 use crate::peripherals::{
     apply_peripherals_to_cpu, load_peripherals_from_disk, on_peripherals_panel_hidden,
@@ -42,17 +43,27 @@ use crate::modal_chrome::{
     modal_body, modal_btn_danger, modal_btn_primary, modal_btn_secondary, modal_caption,
     modal_error, modal_single_line_edit, modal_title, modal_window_frame,
 };
-use crate::theme;
+use crate::customization::{
+    self, active_wallpaper, AfterCustomizationApply, CustomizationState, PresetChoice,
+    WallpaperSettings,
+};
+use crate::wallpaper_filter::process_wallpaper_rgba;
+use crate::theme::{self, ThemePalette};
 use crate::waveforms::{
     on_waveforms_panel_hidden, show_waveforms_panel, WaveformAction, WaveformState,
 };
-use crate::theme::{START_GREEN, START_GREEN_DIM};
 use serialport::SerialPort;
 
 const FIRMWARE_HEX: &str = "firmware.hex";
 
 pub fn setup_style(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "jetbrains_mono".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../include/JetBrainsMono-Regular.ttf"
+        ))),
+    );
     fonts.font_data.insert(
         "iosevka_term".to_owned(),
         Arc::new(FontData::from_static(include_bytes!(
@@ -65,57 +76,46 @@ pub fn setup_style(ctx: &egui::Context) {
             "../include/Orbitron-Variable.ttf"
         ))),
     );
-    if let Some(stack) = fonts.families.get_mut(&FontFamily::Monospace) {
-        stack.insert(0, "iosevka_term".to_owned());
+    let mut proportional = vec!["jetbrains_mono".to_owned()];
+    if let Some(stack) = fonts.families.remove(&FontFamily::Proportional) {
+        for id in stack {
+            if id != "jetbrains_mono" {
+                proportional.push(id);
+            }
+        }
     }
+    fonts
+        .families
+        .insert(FontFamily::Proportional, proportional);
+    let mut monospace = vec!["jetbrains_mono".to_owned(), "iosevka_term".to_owned()];
+    if let Some(stack) = fonts.families.remove(&FontFamily::Monospace) {
+        for id in stack {
+            if id != "jetbrains_mono" && id != "iosevka_term" {
+                monospace.push(id);
+            }
+        }
+    }
+    fonts.families.insert(FontFamily::Monospace, monospace);
     fonts.families.insert(
         FontFamily::Name("fm_title".into()),
         vec!["orbitron_title".to_owned()],
     );
     ctx.set_fonts(fonts);
-
-    let mut visuals = Visuals::dark();
-    visuals.override_text_color = Some(Color32::WHITE);
-    visuals.extreme_bg_color = Color32::BLACK;
-    visuals.faint_bg_color = Color32::BLACK;
-    visuals.panel_fill = Color32::BLACK;
-    visuals.window_fill = Color32::BLACK;
-    visuals.code_bg_color = Color32::BLACK;
-
-    let black_widget = |w: &mut egui::style::WidgetVisuals| {
-        w.bg_fill = Color32::BLACK;
-        w.bg_stroke = Stroke::NONE;
-    };
-    black_widget(&mut visuals.widgets.noninteractive);
-
-    visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_black_alpha(0));
-    visuals.widgets.inactive.corner_radius = CornerRadius::ZERO;
-
-    visuals.widgets.hovered.bg_fill =
-        Color32::from_rgba_unmultiplied(START_GREEN.r(), START_GREEN.g(), START_GREEN.b(), 20);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, START_GREEN_DIM);
-    visuals.widgets.hovered.corner_radius = CornerRadius::ZERO;
-
-    visuals.widgets.active.bg_fill =
-        Color32::from_rgba_unmultiplied(START_GREEN.r(), START_GREEN.g(), START_GREEN.b(), 44);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, START_GREEN);
-    visuals.widgets.active.corner_radius = CornerRadius::ZERO;
-
-    visuals.widgets.open.bg_fill =
-        Color32::from_rgba_unmultiplied(START_GREEN.r(), START_GREEN.g(), START_GREEN.b(), 32);
-    visuals.widgets.open.bg_stroke = Stroke::new(1.0, START_GREEN);
-    visuals.widgets.open.corner_radius = CornerRadius::ZERO;
-
-    visuals.text_cursor.stroke = Stroke::new(2.0, Color32::WHITE);
-    visuals.selection.bg_fill = Color32::from_rgb(55, 55, 55);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
-    ctx.set_visuals(visuals);
+    // Per-frame `Visuals` are applied by `theme::apply_egui_visuals` in `update`.
 
     ctx.style_mut(|style| {
+        let body = FontId::new(13.5, FontFamily::Proportional);
+        style.text_styles.insert(TextStyle::Small, FontId::new(11.5, FontFamily::Proportional));
+        style.text_styles.insert(TextStyle::Body, body.clone());
         style
             .text_styles
             .insert(TextStyle::Monospace, FontId::new(14.0, FontFamily::Monospace));
+        style
+            .text_styles
+            .insert(TextStyle::Button, FontId::new(13.0, FontFamily::Proportional));
+        style
+            .text_styles
+            .insert(TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional));
     });
 
     // Cmd+/− zoom applies only to the editor (see `TextEditor::apply_editor_zoom_keyboard`).
@@ -206,6 +206,8 @@ pub struct FullMetalApp {
     word_helper_state: WordHelperState,
     show_cycle_helper: bool,
     cycle_helper_state: CycleHelperState,
+    show_cost_helper: bool,
+    cost_helper_state: CostHelperState,
     stack_state: StackState,
     xmem_state:  XmemState,
     speed_limit: SpeedLimitState,
@@ -241,18 +243,44 @@ pub struct FullMetalApp {
     upload_port_custom: bool,
     upload_status_line: String,
     upload_job_rx: Option<Receiver<String>>,
-    assembled_board: Option<McuModel>,
+    assembled_board:      Option<McuModel>,
+    color_palette:        ThemePalette,
+    /// `"default"` or a user key from `color_user_presets`
+    color_active:         String,
+    color_user_presets:  BTreeMap<String, ThemePalette>,
+    default_wallpaper:       WallpaperSettings,
+    color_wallpaper_for_named: BTreeMap<String, WallpaperSettings>,
+    wallpaper_cache_key:     Option<(String, f32, f32)>,
+    wallpaper_texture:       Option<egui::TextureHandle>,
+    wallpaper_tex_w:         u32,
+    wallpaper_tex_h:         u32,
+    vscode_style_chrome:     bool,
+    customization:        CustomizationState,
 }
 
 impl FullMetalApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_style(&cc.egui_ctx);
-        let root = scratch_workspace_root();
+        let mut stored = customization::load_stored();
+        for (name, pal) in theme::modifiable_premade_presets() {
+            stored
+                .wallpaper_for_named
+                .entry(name.clone())
+                .or_default();
+            stored.user_presets.entry(name).or_insert(pal);
+        }
+        let color_palette = customization::active_palette(&stored.active, &stored.user_presets);
+        let scratch = scratch_workspace_root();
+        let root = customization::load_last_workspace_dir()
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(|| scratch.clone());
         let _ = fs::create_dir_all(&root);
+        let active_file = find_first_supported_file(&root);
+        let initial_workspace = Workspace { root, active_file };
         let mut app = Self {
             workspace: Workspace {
-                root,
-                active_file: None,
+                root: initial_workspace.root.clone(),
+                active_file: initial_workspace.active_file.clone(),
             },
             editor: TextEditor::new(Id::new("main_editor")),
             modal: ModalState::None,
@@ -267,6 +295,8 @@ impl FullMetalApp {
             word_helper_state: WordHelperState::default(),
             show_cycle_helper: false,
             cycle_helper_state: CycleHelperState::default(),
+            show_cost_helper: false,
+            cost_helper_state: CostHelperState::default(),
             stack_state: StackState::default(),
             xmem_state:  XmemState::default(),
             speed_limit: SpeedLimitState::default(),
@@ -294,8 +324,26 @@ impl FullMetalApp {
             upload_status_line: String::new(),
             upload_job_rx: None,
             assembled_board: None,
+            color_palette,
+            color_active:   stored.active,
+            color_user_presets: stored.user_presets,
+            default_wallpaper:  stored.default_wallpaper,
+            color_wallpaper_for_named: stored.wallpaper_for_named,
+            wallpaper_cache_key:     None,
+            wallpaper_texture:        None,
+            wallpaper_tex_w:         0,
+            wallpaper_tex_h:         0,
+            vscode_style_chrome:     stored.vscode_style_chrome,
+            customization:  CustomizationState::default(),
         };
-        app.reset_simulator_for_workspace(McuModel::Atmega328P);
+        app.enter_editor(initial_workspace);
+        theme::install(&app.color_palette);
+        theme::install_chrome(if app.vscode_style_chrome {
+            theme::ChromeProfile::VsCodeStyle
+        } else {
+            theme::ChromeProfile::Standard
+        });
+        theme::apply_egui_visuals(&cc.egui_ctx);
         app
     }
 
@@ -337,6 +385,78 @@ impl FullMetalApp {
             text: text.into(),
             is_error: true,
         });
+    }
+
+    fn sync_wallpaper_texture(&mut self, ctx: &egui::Context) {
+        let mut w = active_wallpaper(
+            &self.color_active,
+            &self.default_wallpaper,
+            &self.color_wallpaper_for_named,
+        );
+        w.clamp_alpha();
+        if !w.enabled || w.path.is_empty() {
+            self.wallpaper_texture  = None;
+            self.wallpaper_cache_key = None;
+            return;
+        }
+        let key = (w.path.clone(), w.blur, w.corner_smooth);
+        if self.wallpaper_cache_key == Some(key.clone()) && self.wallpaper_texture.is_some() {
+            return;
+        }
+        let Some(resolved) = resolve_wallpaper_path(&w.path) else {
+            self.wallpaper_texture  = None;
+            self.wallpaper_cache_key = None;
+            return;
+        };
+        let Ok(img) = image::open(&resolved) else {
+            self.wallpaper_texture  = None;
+            self.wallpaper_cache_key = None;
+            return;
+        };
+        let rgba = process_wallpaper_rgba(img.to_rgba8(), w.blur, w.corner_smooth);
+        let wpx  = rgba.width();
+        let hpx  = rgba.height();
+        if wpx == 0 || hpx == 0 {
+            self.wallpaper_texture  = None;
+            self.wallpaper_cache_key = None;
+            return;
+        }
+        let size         = [wpx as usize, hpx as usize];
+        let color_image  = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_ref());
+        self.wallpaper_texture = Some(
+            ctx.load_texture(
+                "editor_wallpaper",
+                color_image,
+                egui::TextureOptions::default(),
+            ),
+        );
+        self.wallpaper_cache_key = Some(key);
+        self.wallpaper_tex_w     = wpx;
+        self.wallpaper_tex_h     = hpx;
+    }
+
+    /// Full-viewport image + main-central tint, behind all panels.
+    fn paint_wallpaper_background(&self, ctx: &egui::Context, w_cfg: &WallpaperSettings) {
+        let Some(tex) = &self.wallpaper_texture else {
+            return;
+        };
+        let full = ctx.screen_rect();
+        let sw   = self.wallpaper_tex_w as f32;
+        let sh   = self.wallpaper_tex_h as f32;
+        let dw   = full.width();
+        let dh   = full.height();
+        if sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0 {
+            return;
+        }
+        let p  = ctx.layer_painter(LayerId::background());
+        let uv = cover_uv_rect(sw, sh, dw, dh);
+        let a  = (w_cfg.alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        p.image(tex.id(), full, uv, Color32::from_white_alpha(a));
+        let c    = theme::main_central_fill();
+        // Softer than the old 120 so top/sim panels’ own tints (see `panel_over_wallpaper`) read clearly.
+        const OVERLAY_A: u8 = 88;
+        let fill = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), OVERLAY_A);
+        p.rect_filled(full, CornerRadius::ZERO, fill);
     }
 
     fn reset_simulator_for_workspace(&mut self, model: McuModel) {
@@ -388,6 +508,8 @@ impl FullMetalApp {
         self.peripheral_state = load_peripherals_from_disk(&root);
         self.workspace = workspace;
         self.modal = ModalState::None;
+        let scratch = scratch_workspace_root();
+        let _ = customization::save_last_workspace_dir(&root, &scratch);
     }
 
     fn open_workspace(&mut self, root: PathBuf) {
@@ -725,6 +847,8 @@ impl FullMetalApp {
         let model = parse_board_from_source(self.editor.source()).unwrap_or(McuModel::Atmega328P);
         self.reset_simulator_for_workspace(model);
         self.peripheral_state = load_peripherals_from_disk(&self.workspace.root);
+        let scratch = scratch_workspace_root();
+        let _ = customization::save_last_workspace_dir(&self.workspace.root, &scratch);
         self.editor.mark_saved();
         self.editor.focus_next_frame();
         Ok(format!("Saved {}", path.display()))
@@ -857,6 +981,16 @@ impl FullMetalApp {
                 Ok(msg) => self.set_status(msg),
                 Err(err) => self.set_error(err),
             },
+            ToolbarAction::Customization => {
+                self.customization.open_from_current(
+                    &self.color_palette,
+                    &self.color_active,
+                    &self.color_user_presets,
+                    &self.default_wallpaper,
+                    &self.color_wallpaper_for_named,
+                    self.vscode_style_chrome,
+                );
+            },
             ToolbarAction::SimTogglePanel => {
                 self.show_sim = !self.show_sim;
                 if self.show_sim {
@@ -866,6 +1000,7 @@ impl FullMetalApp {
                     self.show_uart = false;
                     self.show_word_helper  = false;
                     self.show_cycle_helper = false;
+                    self.show_cost_helper = false;
                 }
             }
             ToolbarAction::PeripheralsTogglePanel => {
@@ -877,6 +1012,7 @@ impl FullMetalApp {
                     self.show_uart = false;
                     self.show_word_helper = false;
                     self.show_cycle_helper = false;
+                    self.show_cost_helper = false;
                 }
             }
             ToolbarAction::WaveformsTogglePanel => {
@@ -888,6 +1024,7 @@ impl FullMetalApp {
                     self.show_uart = false;
                     self.show_word_helper = false;
                     self.show_cycle_helper = false;
+                    self.show_cost_helper = false;
                 }
             }
             ToolbarAction::UartTogglePanel => {
@@ -899,6 +1036,7 @@ impl FullMetalApp {
                     self.show_waveforms = false;
                     self.show_word_helper = false;
                     self.show_cycle_helper = false;
+                    self.show_cost_helper = false;
                 }
             }
             ToolbarAction::UploadTogglePanel => {
@@ -910,6 +1048,7 @@ impl FullMetalApp {
                     self.show_uart = false;
                     self.show_word_helper = false;
                     self.show_cycle_helper = false;
+                    self.show_cost_helper = false;
                 }
             }
             ToolbarAction::DocsFlashLocations => {
@@ -924,6 +1063,7 @@ impl FullMetalApp {
                     self.show_uart = false;
                     self.show_upload = false;
                     self.show_cycle_helper = false;
+                    self.show_cost_helper = false;
                 }
             }
             ToolbarAction::HelpersCycleHelper => {
@@ -935,6 +1075,19 @@ impl FullMetalApp {
                     self.show_uart = false;
                     self.show_upload = false;
                     self.show_word_helper = false;
+                    self.show_cost_helper = false;
+                }
+            }
+            ToolbarAction::HelpersCostAnalysis => {
+                self.show_cost_helper = !self.show_cost_helper;
+                if self.show_cost_helper {
+                    self.show_sim          = false;
+                    self.show_peripherals = false;
+                    self.show_waveforms = false;
+                    self.show_uart = false;
+                    self.show_upload = false;
+                    self.show_word_helper = false;
+                    self.show_cycle_helper = false;
                 }
             }
         }
@@ -1012,12 +1165,12 @@ impl FullMetalApp {
 
                         modal_caption(ui, "Extension");
                         ui.add_space(4.0);
-                        ComboBox::from_id_salt("new_file_extension_modal")
+                        theme::combo_box("new_file_extension_modal")
                             .selected_text(
                                 RichText::new(extension.label())
                                     .monospace()
                                     .size(12.0)
-                                    .color(theme::ACCENT_DIM),
+                                    .color(theme::accent_dim()),
                             )
                             .show_ui(ui, |ui| {
                                 for candidate in [
@@ -1031,7 +1184,7 @@ impl FullMetalApp {
                                     let label = RichText::new(candidate.label())
                                         .monospace()
                                         .size(12.0)
-                                        .color(theme::ACCENT_DIM);
+                                        .color(theme::accent_dim());
                                     ui.selectable_value(extension, candidate, label);
                                 }
                             });
@@ -1211,6 +1364,48 @@ impl FullMetalApp {
 
 impl eframe::App for FullMetalApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        theme::install(
+            if self.customization.open {
+                &self.customization.editing
+            } else {
+                &self.color_palette
+            },
+        );
+        let use_vscode = if self.customization.open {
+            self.customization.vscode_style_chrome
+        } else {
+            self.vscode_style_chrome
+        };
+        theme::install_chrome(if use_vscode {
+            theme::ChromeProfile::VsCodeStyle
+        } else {
+            theme::ChromeProfile::Standard
+        });
+        theme::apply_egui_visuals(ctx);
+        let vscode_layout = use_vscode;
+        self.sync_wallpaper_texture(ctx);
+        let mut w_cfg = active_wallpaper(
+            &self.color_active,
+            &self.default_wallpaper,
+            &self.color_wallpaper_for_named,
+        );
+        w_cfg.clamp_alpha();
+        let wallpaper_showing = w_cfg.enabled
+            && !w_cfg.path.is_empty()
+            && self.wallpaper_texture.is_some()
+            && self
+                .wallpaper_cache_key
+                .as_ref()
+                .is_some_and(|k| {
+                    k.0 == w_cfg.path
+                        && k.1 == w_cfg.blur
+                        && k.2 == w_cfg.corner_smooth
+                });
+        theme::set_wallpaper_visible(ctx, wallpaper_showing);
+        if wallpaper_showing {
+            self.paint_wallpaper_background(ctx, &w_cfg);
+        }
+
         self.poll_upload_job();
         if self.upload_job_rx.is_some() {
             ctx.request_repaint();
@@ -1254,8 +1449,13 @@ impl eframe::App for FullMetalApp {
 
         {
             let workspace = &self.workspace;
+            let mut top_outer = Frame::side_top_panel(&*ctx.style());
+            if wallpaper_showing {
+                top_outer.fill = Color32::TRANSPARENT;
+            }
             TopBottomPanel::top("retro_toolbar")
-                .exact_height(44.0)
+                .frame(top_outer)
+                .exact_height(if vscode_layout { 48.0 } else { 44.0 })
                 .show(ctx, |ui| {
                     toolbar_action = show_toolbar(
                         ui,
@@ -1267,7 +1467,7 @@ impl eframe::App for FullMetalApp {
                         self.show_waveforms,
                         self.show_uart,
                         self.show_upload,
-                        self.show_word_helper || self.show_cycle_helper,
+                        self.show_word_helper || self.show_cycle_helper || self.show_cost_helper,
                         self.assembled_board,
                     );
                 });
@@ -1276,12 +1476,17 @@ impl eframe::App for FullMetalApp {
             let active = workspace.active_file.clone();
             let mut pending_switch: Option<PathBuf> = None;
             if files.len() > 1 {
+                let mut files_top_outer = Frame::side_top_panel(&*ctx.style());
+                if wallpaper_showing {
+                    files_top_outer.fill = Color32::TRANSPARENT;
+                }
                 TopBottomPanel::top("workspace_files_bar")
+                    .frame(files_top_outer)
                     .exact_height(32.0)
                     .show(ctx, |ui| {
                         Frame::NONE
-                            .fill(theme::PANEL_LIFT)
-                            .stroke(Stroke::new(1.0, START_GREEN_DIM))
+                            .fill(theme::panel_over_wallpaper(ctx, theme::panel_lift()))
+                            .stroke(Stroke::new(1.0, theme::start_green_dim()))
                             .inner_margin(Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 egui::ScrollArea::horizontal()
@@ -1301,10 +1506,18 @@ impl eframe::App for FullMetalApp {
                                                         RichText::new(name)
                                                             .monospace()
                                                             .size(12.0)
-                                                            .color(if is_active { Color32::BLACK } else { START_GREEN }),
+                                                            .color(if is_active {
+                                                                theme::on_accent_text()
+                                                            } else {
+                                                                theme::start_green()
+                                                            }),
                                                     )
-                                                    .fill(if is_active { START_GREEN } else { Color32::TRANSPARENT })
-                                                    .stroke(Stroke::new(1.0, START_GREEN_DIM)),
+                                                    .fill(if is_active {
+                                                        theme::start_green()
+                                                    } else {
+                                                        Color32::TRANSPARENT
+                                                    })
+                                                    .stroke(Stroke::new(1.0, theme::start_green_dim())),
                                                 );
                                                 if resp.clicked() {
                                                     pending_switch = Some(path.clone());
@@ -1324,7 +1537,6 @@ impl eframe::App for FullMetalApp {
             }
         }
 
-        // USB serial: read and refresh display snapshot before painting the UART panel (same frame).
         if self.show_uart && self.uart_state.backend == UartBackend::UsbSerial {
             if let Some(port) = self.uart_serial.as_mut() {
                 let n = poll_hardware_serial(
@@ -1339,7 +1551,6 @@ impl eframe::App for FullMetalApp {
             refresh_uart_display_throttle(&mut self.uart_state);
         }
 
-        // rhs_panel_editor_only: sim, helpers, or upload (mutually exclusive)
         let mut sim_action = SimAction::None;
         let mut upload_action = UploadAction::None;
         let mut wf_action = WaveformAction::None;
@@ -1349,14 +1560,38 @@ impl eframe::App for FullMetalApp {
             || self.show_uart
             || self.show_word_helper
             || self.show_cycle_helper
+            || self.show_cost_helper
             || self.show_upload;
 
         if rhs_open {
             let rhs_w = 360.0;
+            let rhs_panel_fill = if wallpaper_showing {
+                theme::panel_over_wallpaper(ctx, theme::panel_deep())
+            } else {
+                theme::panel_deep()
+            };
+            let rhs_screen_inset = match theme::chrome_profile() {
+                theme::ChromeProfile::VsCodeStyle => 8.0_f32,
+                theme::ChromeProfile::Standard => 10.0_f32,
+            };
+            let rhs_gutter_fill = match theme::chrome_profile() {
+                theme::ChromeProfile::VsCodeStyle => {
+                    theme::panel_over_wallpaper(ctx, theme::panel_lift())
+                }
+                theme::ChromeProfile::Standard => {
+                    theme::panel_over_wallpaper(ctx, theme::panel_mid())
+                }
+            };
+            egui::SidePanel::right("rhs_screen_inset")
+                .exact_width(rhs_screen_inset)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::NONE.fill(rhs_gutter_fill))
+                .show(ctx, |_ui| {});
             egui::SidePanel::right("rhs_panel")
                 .exact_width(rhs_w)
                 .resizable(false)
-                .frame(egui::Frame::NONE)
+                .frame(Frame::NONE.fill(rhs_panel_fill))
                 .show(ctx, |ui| {
                     let model = self.mcu_model_from_editor();
                     if self.show_upload {
@@ -1432,6 +1667,9 @@ impl eframe::App for FullMetalApp {
                     } else if self.show_cycle_helper {
                         let files = self.collect_asm_files();
                         show_cycle_helper(ui, &mut self.cycle_helper_state, &files);
+                    } else if self.show_cost_helper {
+                        let files = self.collect_asm_files();
+                        show_cost_helper(ui, &mut self.cost_helper_state, &files);
                     }
                 });
         }
@@ -1439,8 +1677,21 @@ impl eframe::App for FullMetalApp {
         egui::CentralPanel::default()
             .frame(
                 Frame::NONE
-                    .fill(Color32::BLACK)
-                    .inner_margin(Margin::same(6)),
+                    .fill(if wallpaper_showing {
+                        Color32::TRANSPARENT
+                    } else {
+                        theme::main_central_fill()
+                    })
+                    .inner_margin(if vscode_layout {
+                        Margin {
+                            left: 6,
+                            right: 6,
+                            top: 2,
+                            bottom: 6,
+                        }
+                    } else {
+                        Margin::same(6)
+                    }),
             )
             .show(ctx, |ui| {
                 ui.set_min_size(ui.available_size());
@@ -1449,21 +1700,28 @@ impl eframe::App for FullMetalApp {
                     self.editor.request_initial_focus(ctx);
                 }
                 let ghost = self.workspace.active_file.is_none() && self.editor.source().is_empty();
+                let text_back = if wallpaper_showing {
+                    Color32::TRANSPARENT
+                } else {
+                    theme::main_central_fill()
+                };
+                let editor_top_pad = if vscode_layout { 2.0_f32 } else { 8.0_f32 };
                 ui.vertical(|ui| {
+                    ui.add_space(editor_top_pad);
                     if let Some(status) = &self.status {
                         ui.label(
                             RichText::new(&status.text)
                                 .monospace()
                                 .size(13.0)
                                 .color(if status.is_error {
-                                    Color32::from_rgb(255, 140, 140)
+                                    theme::status_error()
                                 } else {
-                                    START_GREEN_DIM
+                                    theme::start_green_dim()
                                 }),
                         );
                         ui.add_space(6.0);
                     }
-                    self.editor.show(ui, ghost);
+                    self.editor.show(ui, ghost, text_back);
                 });
             });
 
@@ -1667,8 +1925,6 @@ impl eframe::App for FullMetalApp {
             ctx.request_repaint(); // auto_run_repaint
         }
 
-        // Simulator UART after CPU stepped; USB was already polled before the panel. Always refresh
-        // throttled snapshots so sim output and late USB bytes update the frozen view.
         if self.show_uart {
             if self.uart_state.backend == UartBackend::Simulator {
                 let model = self.mcu_model_from_editor();
@@ -1683,9 +1939,58 @@ impl eframe::App for FullMetalApp {
         show_flash_locations_window(ctx, &mut self.show_flash_locations, self.assembled_board, &self.sim);
 
         self.show_modal(ctx);
+
+        customization::show_customization_overlay(ctx, &mut self.customization, &mut |apply: AfterCustomizationApply| {
+            self.color_user_presets  = apply.user_presets;
+            self.color_active = match &apply.choice {
+                PresetChoice::Default    => "default".to_string(),
+                PresetChoice::OneDarkPro => customization::ONE_DARK_PRO_ACTIVE.to_string(),
+                PresetChoice::Custom(n)  => n.clone(),
+            };
+            self.color_palette   = apply.palette;
+            self.default_wallpaper = apply.default_wallpaper;
+            self.color_wallpaper_for_named = apply.wallpaper_for_named;
+            self.vscode_style_chrome = apply.vscode_style_chrome;
+        });
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {}
+}
+
+fn cover_uv_rect(src_w: f32, src_h: f32, dst_w: f32, dst_h: f32) -> egui::Rect {
+    if src_w <= 0.0 || src_h <= 0.0 || dst_w <= 0.0 || dst_h <= 0.0 {
+        return egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    }
+    let ir = src_w / src_h;
+    let dr = dst_w / dst_h;
+    if ir > dr {
+        let nw  = (dr / ir).clamp(0.0, 1.0);
+        let u0  = 0.5 * (1.0 - nw);
+        egui::Rect::from_min_max(egui::pos2(u0, 0.0), egui::pos2(u0 + nw, 1.0))
+    } else {
+        let nh  = (ir / dr).clamp(0.0, 1.0);
+        let v0  = 0.5 * (1.0 - nh);
+        egui::Rect::from_min_max(egui::pos2(0.0, v0), egui::pos2(1.0, v0 + nh))
+    }
+}
+
+fn resolve_wallpaper_path(s: &str) -> Option<PathBuf> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let p =     if t.starts_with("~/") {
+        if let Some(h) = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+        {
+            PathBuf::from(h).join(&t[2..])
+        } else {
+            return None;
+        }
+    } else {
+        PathBuf::from(t)
+    };
+    p.is_file().then_some(p)
 }
 
 fn validate_leaf_name(name: &str) -> Result<String, String> {

@@ -8,16 +8,6 @@ use eframe::egui::{
 
 use crate::theme;
 
-const MNEMONIC: Color32 = theme::ACCENT;
-const COMMENT: Color32 = theme::ACCENT_DIM;
-const REGISTER: Color32 = Color32::WHITE;
-const NUMBER: Color32 = theme::LITERAL_NUM;
-const LABEL: Color32 = theme::LABEL_CYAN;
-const PUNCT:    Color32 = Color32::from_rgb(90, 90, 90);
-const WS:       Color32 = Color32::from_rgb(55, 55, 55);
-
-// public_entry_point
-
 /// highlight_avr text→layout_job wrap_width caller_side
 pub fn highlight_avr(text: &str, font_id: &FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
@@ -28,7 +18,7 @@ pub fn highlight_avr(text: &str, font_id: &FontId) -> LayoutJob {
             Some(rel) => {
                 let end = start + rel;
                 hl_line(&mut job, &text[start..end], font_id);
-                push(&mut job, "\n", Color32::WHITE, font_id);
+                push(&mut job, "\n", theme::text_primary(), font_id);
                 start = end + 1;
             }
             None => {
@@ -48,6 +38,15 @@ fn hl_line(job: &mut LayoutJob, line: &str, font: &FontId) {
         return;
     }
 
+    let mnemonic = theme::accent();
+    let comment = theme::accent_dim();
+    let number = theme::literal_num();
+    let label = theme::label_cyan();
+    let reg = theme::text_primary();
+    let punct = theme::syntax_punct();
+    let ws_col = theme::syntax_ws();
+    let plain = theme::text_primary();
+
     let b = line.as_bytes();
     let len = line.len();
     let mut c = 0usize; // byte cursor
@@ -55,7 +54,7 @@ fn hl_line(job: &mut LayoutJob, line: &str, font: &FontId) {
     // lead_ws
     let ws = non_ws(b, c);
     if ws > c {
-        push(job, &line[c..ws], WS, font);
+        push(job, &line[c..ws], ws_col, font);
         c = ws;
     }
     if c >= len {
@@ -64,7 +63,7 @@ fn hl_line(job: &mut LayoutJob, line: &str, font: &FontId) {
 
     // asm_comment
     if b[c] == b';' {
-        push(job, &line[c..], COMMENT, font);
+        push(job, &line[c..], comment, font);
         return;
     }
 
@@ -74,29 +73,29 @@ fn hl_line(job: &mut LayoutJob, line: &str, font: &FontId) {
 
     if b.get(w_end) == Some(&b':') {
         // label_def_with_colon
-        push(job, &line[c..w_end + 1], LABEL, font);
+        push(job, &line[c..w_end + 1], label, font);
         c = w_end + 1;
 
         // ws_after_label
         let ws2 = non_ws(b, c);
         if ws2 > c {
-            push(job, &line[c..ws2], WS, font);
+            push(job, &line[c..ws2], ws_col, font);
             c = ws2;
         }
         if c >= len {
             return;
         }
         if b[c] == b';' {
-            push(job, &line[c..], COMMENT, font);
+            push(job, &line[c..], comment, font);
             return;
         }
 
         // mnem_same_line
         let m_end = word_end(b, c, len);
-        push(job, &line[c..m_end], MNEMONIC, font);
+        push(job, &line[c..m_end], mnemonic, font);
         c = m_end;
     } else {
-        push(job, word, MNEMONIC, font);
+        push(job, word, mnemonic, font);
         c = w_end;
     }
 
@@ -104,27 +103,27 @@ fn hl_line(job: &mut LayoutJob, line: &str, font: &FontId) {
     while c < len {
         match b[c] {
             b';' => {
-                push(job, &line[c..], COMMENT, font);
+                push(job, &line[c..], comment, font);
                 return;
             }
             b' ' | b'\t' => {
                 let ws = non_ws(b, c);
-                push(job, &line[c..ws], WS, font);
+                push(job, &line[c..ws], ws_col, font);
                 c = ws;
             }
             b',' => {
-                push(job, ",", PUNCT, font);
+                push(job, ",", punct, font);
                 c += 1;
             }
             ch if is_word_start(ch) => {
                 let tok_end = word_end(b, c, len);
                 let tok = &line[c..tok_end];
                 let color = if is_register(tok) {
-                    REGISTER
+                    reg
                 } else if is_number(tok) {
-                    NUMBER
+                    number
                 } else {
-                    Color32::WHITE
+                    plain
                 };
                 push(job, tok, color, font);
                 c = tok_end;
@@ -132,7 +131,7 @@ fn hl_line(job: &mut LayoutJob, line: &str, font: &FontId) {
             _ => {
                 // other_utf8_step
                 let ch_len = line[c..].chars().next().map_or(1, |ch| ch.len_utf8());
-                push(job, &line[c..c + ch_len], Color32::WHITE, font);
+                push(job, &line[c..c + ch_len], plain, font);
                 c += ch_len;
             }
         }

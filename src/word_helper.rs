@@ -1,15 +1,10 @@
 //! word_helper rhs_panel distance_rjmp_vs_jmp
 
 use eframe::egui::{
-    self, Button, Color32, ComboBox, Frame, Margin, RichText, Stroke, TextEdit, Ui,
+    self, Button, Color32, Frame, Margin, RichText, Stroke, TextEdit, Ui,
 };
 use crate::avr::assembler::assemble_full;
 use crate::theme;
-use crate::theme::{START_GREEN, START_GREEN_DIM};
-
-const FOCUS: Color32 = theme::FOCUS;
-const DIM: Color32 = theme::DIM_GRAY;
-const ERR_RED: Color32 = theme::ERR_RED;
 
 // RJMP is ±2047 from (PC+1), 1 word.  JMP is 2 words but unlimited range.
 const RJMP_MAX: i64 = 2047;
@@ -41,7 +36,7 @@ impl Default for WordHelperState {
 
 // lookup_word_addr: returns word address for 1-indexed line in source, or Err
 fn addr_for_line(source: &str, line: usize) -> Result<u32, String> {
-    let (_, map) = assemble_full(source)
+    let (_, map, _) = assemble_full(source)
         .map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
     if map.is_empty() {
         return Err("no instructions assembled".to_string());
@@ -63,15 +58,15 @@ pub fn show_word_helper(
     files: &[(String, String)],
 ) {
     Frame::NONE
-        .fill(theme::PANEL_DEEP)
-        .stroke(Stroke::new(1.0, START_GREEN_DIM))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+        .stroke(Stroke::new(1.0, theme::start_green_dim()))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
 
             ui.label(
                 RichText::new("[ WORD HELPER ]")
-                    .monospace().size(13.0).color(START_GREEN),
+                    .monospace().size(13.0).color(theme::start_green()),
             );
             ui.add_space(6.0);
             ui.separator();
@@ -80,7 +75,7 @@ pub fn show_word_helper(
             if files.is_empty() {
                 ui.label(
                     RichText::new("No valid files found in workspace.")
-                        .monospace().size(11.5).color(DIM),
+                        .monospace().size(11.5).color(theme::dim_gray()),
                 );
                 return;
             }
@@ -101,7 +96,7 @@ pub fn show_word_helper(
                 _ => {
                     ui.label(
                         RichText::new("Enter valid file + line for both slots.")
-                            .monospace().size(11.0).color(DIM),
+                            .monospace().size(11.0).color(theme::dim_gray()),
                     );
                 }
             }
@@ -115,7 +110,7 @@ fn render_slot(
     files: &[(String, String)],
     id:    &str,
 ) -> Result<u32, String> {
-    ui.label(RichText::new(label).monospace().size(11.5).color(START_GREEN_DIM));
+    ui.label(RichText::new(label).monospace().size(11.5).color(theme::start_green_dim()));
     ui.add_space(2.0);
 
     ui.horizontal(|ui| {
@@ -124,11 +119,11 @@ fn render_slot(
             .map(|(n, _)| n.as_str())
             .unwrap_or("—");
 
-        ComboBox::from_id_salt(format!("{id}_file"))
+        theme::combo_box(format!("{id}_file"))
             .width(140.0)
-            .selected_text(RichText::new(sel_name).monospace().size(11.0).color(START_GREEN))
+            .selected_text(RichText::new(sel_name).monospace().size(11.0).color(theme::start_green()))
             .show_ui(ui, |ui| {
-                ui.style_mut().visuals.override_text_color = Some(START_GREEN);
+                ui.style_mut().visuals.override_text_color = Some(theme::start_green());
                 for (i, (name, _)) in files.iter().enumerate() {
                     ui.selectable_value(
                         &mut slot.file_idx,
@@ -139,7 +134,7 @@ fn render_slot(
             });
 
         // line number input
-        ui.label(RichText::new("line:").monospace().size(11.0).color(DIM));
+        ui.label(RichText::new("line:").monospace().size(11.0).color(theme::dim_gray()));
         ui.add(
             TextEdit::singleline(&mut slot.line_text)
                 .desired_width(48.0)
@@ -151,7 +146,7 @@ fn render_slot(
     let line_nr = slot.line_text.trim().parse::<usize>().ok();
     match line_nr {
         None => {
-            ui.label(RichText::new("").monospace().size(10.5).color(DIM));
+            ui.label(RichText::new("").monospace().size(10.5).color(theme::dim_gray()));
             Err("no line".to_string())
         }
         Some(ln) => {
@@ -160,14 +155,14 @@ fn render_slot(
                 Ok(addr) => {
                     ui.label(
                         RichText::new(format!("  → word address 0x{addr:04X}"))
-                            .monospace().size(11.0).color(FOCUS),
+                            .monospace().size(11.0).color(theme::focus()),
                     );
                     Ok(addr)
                 }
                 Err(e) => {
                     ui.label(
                         RichText::new(format!("  ✗ {e}"))
-                            .monospace().size(10.5).color(ERR_RED),
+                            .monospace().size(10.5).color(theme::err_red()),
                     );
                     Err(e)
                 }
@@ -184,7 +179,7 @@ fn show_results(ui: &mut Ui, a: u32, b: u32) {
     let sign = if diff >= 0 { "+" } else { "" };
     ui.label(
         RichText::new(format!("DISTANCE   {sign}{diff}  words  (0x{abs_diff:04X})"))
-            .monospace().size(12.5).color(START_GREEN),
+            .monospace().size(12.5).color(theme::start_green()),
     );
     ui.add_space(6.0);
     ui.separator();
@@ -195,26 +190,26 @@ fn show_results(ui: &mut Ui, a: u32, b: u32) {
     let rjmp_ab = off_ab >= RJMP_MIN && off_ab <= RJMP_MAX;
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("A → B:").monospace().size(11.5).color(DIM));
+        ui.label(RichText::new("A → B:").monospace().size(11.5).color(theme::dim_gray()));
         if rjmp_ab {
             ui.add(
                 Button::new(RichText::new("RJMP ✓").monospace().size(12.0).color(Color32::BLACK))
-                    .fill(START_GREEN)
-                    .stroke(Stroke::new(1.0, START_GREEN)),
+                    .fill(theme::start_green())
+                    .stroke(Stroke::new(1.0, theme::start_green())),
             );
             ui.label(
                 RichText::new(format!("  1 word  (offset {off_ab:+})"))
-                    .monospace().size(11.0).color(START_GREEN_DIM),
+                    .monospace().size(11.0).color(theme::start_green_dim()),
             );
         } else {
             ui.add(
                 Button::new(RichText::new("JMP").monospace().size(12.0).color(Color32::BLACK))
-                    .fill(FOCUS)
-                    .stroke(Stroke::new(1.0, FOCUS)),
+                    .fill(theme::focus())
+                    .stroke(Stroke::new(1.0, theme::focus())),
             );
             ui.label(
                 RichText::new(format!("  2 words  (offset {off_ab:+}, exceeds ±2047)"))
-                    .monospace().size(11.0).color(FOCUS),
+                    .monospace().size(11.0).color(theme::focus()),
             );
         }
     });
@@ -225,26 +220,26 @@ fn show_results(ui: &mut Ui, a: u32, b: u32) {
     let rjmp_ba = off_ba >= RJMP_MIN && off_ba <= RJMP_MAX;
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("B → A:").monospace().size(11.5).color(DIM));
+        ui.label(RichText::new("B → A:").monospace().size(11.5).color(theme::dim_gray()));
         if rjmp_ba {
             ui.add(
                 Button::new(RichText::new("RJMP ✓").monospace().size(12.0).color(Color32::BLACK))
-                    .fill(START_GREEN)
-                    .stroke(Stroke::new(1.0, START_GREEN)),
+                    .fill(theme::start_green())
+                    .stroke(Stroke::new(1.0, theme::start_green())),
             );
             ui.label(
                 RichText::new(format!("  1 word  (offset {off_ba:+})"))
-                    .monospace().size(11.0).color(START_GREEN_DIM),
+                    .monospace().size(11.0).color(theme::start_green_dim()),
             );
         } else {
             ui.add(
                 Button::new(RichText::new("JMP").monospace().size(12.0).color(Color32::BLACK))
-                    .fill(FOCUS)
-                    .stroke(Stroke::new(1.0, FOCUS)),
+                    .fill(theme::focus())
+                    .stroke(Stroke::new(1.0, theme::focus())),
             );
             ui.label(
                 RichText::new(format!("  2 words  (offset {off_ba:+}, exceeds ±2047)"))
-                    .monospace().size(11.0).color(FOCUS),
+                    .monospace().size(11.0).color(theme::focus()),
             );
         }
     });
@@ -256,6 +251,6 @@ fn show_results(ui: &mut Ui, a: u32, b: u32) {
     ui.add_space(4.0);
     ui.label(
         RichText::new("RJMP range: ±2047 words (1 word instr)   |   JMP: any (2 word instr)")
-            .monospace().size(10.5).color(DIM),
+            .monospace().size(10.5).color(theme::dim_gray()),
     );
 }

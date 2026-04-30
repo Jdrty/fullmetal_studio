@@ -4,7 +4,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Button, Color32, ComboBox, CornerRadius, DragValue, Frame, Layout, Margin,
+    self, Align, Button, CornerRadius, DragValue, Frame, Layout, Margin,
     RichText, ScrollArea, Slider, Stroke, TextEdit, Ui,
 };
 use serialport::SerialPort;
@@ -496,8 +496,8 @@ pub fn show_uart_panel(
     let mut action = SimAction::None;
 
     Frame::NONE
-        .fill(theme::PANEL_DEEP)
-        .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::panel_deep()))
+        .stroke(Stroke::new(0.75, theme::sim_border()))
         .inner_margin(Margin::same(10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -510,7 +510,7 @@ pub fn show_uart_panel(
                 RichText::new(title)
                     .monospace()
                     .size(13.0)
-                    .color(theme::START_GREEN),
+                    .color(theme::accent()),
             );
             ui.add_space(6.0);
 
@@ -520,7 +520,7 @@ pub fn show_uart_panel(
                     RichText::new("Source:")
                         .monospace()
                         .size(10.5)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 );
                 ui.radio_value(&mut state.backend, UartBackend::Simulator, "Simulator");
                 ui.radio_value(&mut state.backend, UartBackend::UsbSerial, "USB serial");
@@ -542,7 +542,7 @@ pub fn show_uart_panel(
                         )
                         .monospace()
                         .size(9.5)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                     );
                 }
             }
@@ -554,7 +554,7 @@ pub fn show_uart_panel(
                     RichText::new("Line ending:")
                         .monospace()
                         .size(10.5)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 );
                 line_ending_combo(ui, state);
             });
@@ -575,7 +575,7 @@ pub fn show_uart_panel(
                         RichText::new("gap")
                             .monospace()
                             .size(10.0)
-                            .color(theme::ACCENT_DIM),
+                            .color(theme::accent_dim()),
                     );
                     let mut ms = state.rx0_stab.min_interval_ms;
                     let dv = ui.add(
@@ -595,7 +595,7 @@ pub fn show_uart_panel(
                 )
                 .monospace()
                 .size(9.0)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
             );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -603,7 +603,7 @@ pub fn show_uart_panel(
                     RichText::new("Display hold")
                         .monospace()
                         .size(10.5)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 );
                 ui.add(
                     Slider::new(&mut state.display_hold_ms, 0..=1000)
@@ -617,7 +617,7 @@ pub fn show_uart_panel(
                 )
                 .monospace()
                 .size(9.0)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
             );
             ui.add_space(4.0);
 
@@ -632,7 +632,7 @@ pub fn show_uart_panel(
                                     RichText::new("USART0 (device TX)")
                                         .monospace()
                                         .size(11.0)
-                                        .color(theme::ACCENT_DIM),
+                                        .color(theme::accent_dim()),
                                 );
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     if ui
@@ -640,7 +640,7 @@ pub fn show_uart_panel(
                                             RichText::new("Clear monitor")
                                                 .monospace()
                                                 .size(10.0)
-                                                .color(theme::ACCENT_DIM),
+                                                .color(theme::accent_dim()),
                                         )
                                         .clicked()
                                     {
@@ -674,7 +674,7 @@ pub fn show_uart_panel(
                                         RichText::new("USART1 (device TX)")
                                             .monospace()
                                             .size(11.0)
-                                            .color(theme::ACCENT_DIM),
+                                            .color(theme::accent_dim()),
                                     );
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         if ui
@@ -682,7 +682,7 @@ pub fn show_uart_panel(
                                                 RichText::new("Clear monitor")
                                                     .monospace()
                                                     .size(10.0)
-                                                    .color(theme::ACCENT_DIM),
+                                                    .color(theme::accent_dim()),
                                             )
                                             .clicked()
                                         {
@@ -731,7 +731,7 @@ pub fn show_uart_panel(
                             RichText::new("Clear serial logs")
                                 .monospace()
                                 .size(10.0)
-                                .color(theme::ACCENT_DIM),
+                                .color(theme::accent_dim()),
                         )
                         .clicked()
                     {
@@ -774,7 +774,7 @@ fn show_uart_usb_section(
             RichText::new("Port (−P)")
                 .monospace()
                 .size(10.5)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
         );
         let n = serial_ports.len();
         let custom_idx = n;
@@ -793,7 +793,7 @@ fn show_uart_usb_section(
             "Custom path…"
         };
 
-        ComboBox::from_id_salt("uart_hw_serial_port")
+        theme::combo_box("uart_hw_serial_port")
             .selected_text(RichText::new(selected_label).monospace().size(10.5))
             .width(200.0)
             .show_ui(ui, |ui| {
@@ -831,10 +831,10 @@ fn show_uart_usb_section(
             RichText::new("Baud")
                 .monospace()
                 .size(10.5)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
         );
         let baud_label = state.hardware_baud.to_string();
-        ComboBox::from_id_salt("uart_hw_baud")
+        theme::combo_box("uart_hw_baud")
             .selected_text(RichText::new(baud_label).monospace().size(10.5))
             .width(100.0)
             .show_ui(ui, |ui| {
@@ -857,9 +857,9 @@ fn show_uart_usb_section(
             if ui
                 .add_enabled(
                     true,
-                    Button::new(RichText::new("Disconnect").monospace().size(11.0).color(theme::ACCENT))
-                        .fill(theme::SIM_SURFACE_LIFT)
-                        .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT)),
+                    Button::new(RichText::new("Disconnect").monospace().size(11.0).color(theme::accent()))
+                        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                        .stroke(Stroke::new(1.0, theme::sim_border_bright())),
                 )
                 .clicked()
             {
@@ -869,9 +869,9 @@ fn show_uart_usb_section(
         } else if ui
             .add_enabled(
                 can_toggle,
-                Button::new(RichText::new("Connect").monospace().size(11.0).color(theme::ACCENT))
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT)),
+                Button::new(RichText::new("Connect").monospace().size(11.0).color(theme::accent()))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright())),
             )
             .clicked()
         {
@@ -893,7 +893,7 @@ fn show_uart_usb_section(
             RichText::new(format!("Error: {err}"))
                 .monospace()
                 .size(10.0)
-                .color(theme::ERR_RED),
+                .color(theme::err_red()),
         );
     }
 
@@ -903,7 +903,7 @@ fn show_uart_usb_section(
             RichText::new("Device TX → monitor")
                 .monospace()
                 .size(11.0)
-                .color(theme::ACCENT_DIM),
+                .color(theme::accent_dim()),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
@@ -911,7 +911,7 @@ fn show_uart_usb_section(
                     RichText::new("Clear monitor")
                         .monospace()
                         .size(10.0)
-                        .color(theme::ACCENT_DIM),
+                        .color(theme::accent_dim()),
                 )
                 .clicked()
             {
@@ -951,15 +951,15 @@ fn uart_send_row_usb(
         RichText::new(label)
             .monospace()
             .size(10.5)
-            .color(theme::ACCENT_DIM),
+            .color(theme::accent_dim()),
     );
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let te_width = ((ui.available_width() - 78.0).max(40.0)).min(HOST_RX_SEND_MAX_W);
         let enabled = uart_serial.is_some();
         Frame::NONE
-            .fill(theme::SIM_SURFACE_LIFT)
-            .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+            .stroke(Stroke::new(1.0, theme::sim_border_bright()))
             .inner_margin(Margin::symmetric(6, 4))
             .corner_radius(CornerRadius::same(4))
             .show(ui, |ui| {
@@ -976,9 +976,9 @@ fn uart_send_row_usb(
         if ui
             .add_enabled(
                 enabled,
-                Button::new(RichText::new("Send").monospace().size(11.0).color(theme::ACCENT))
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+                Button::new(RichText::new("Send").monospace().size(11.0).color(theme::accent()))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright()))
                     .corner_radius(CornerRadius::same(5)),
             )
             .clicked()
@@ -1001,21 +1001,21 @@ fn uart_send_row_usb(
 
 fn line_ending_combo(ui: &mut Ui, state: &mut UartPanelState) {
     Frame::NONE
-        .fill(theme::SIM_SURFACE_LIFT)
-        .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+        .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+        .stroke(Stroke::new(1.0, theme::sim_border_bright()))
         .inner_margin(Margin::symmetric(6, 3))
         .corner_radius(CornerRadius::same(4))
         .show(ui, |ui| {
-            egui::ComboBox::from_id_salt("uart_send_line_ending")
+            theme::combo_box("uart_send_line_ending")
                 .width(160.0)
                 .selected_text(
                     RichText::new(state.send_line_ending.label())
                         .monospace()
                         .size(10.5)
-                        .color(theme::START_GREEN),
+                        .color(theme::accent()),
                 )
                 .show_ui(ui, |ui| {
-                    ui.style_mut().visuals.override_text_color = Some(theme::START_GREEN);
+                    ui.style_mut().visuals.override_text_color = Some(theme::accent());
                     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     for v in [
                         UartSendLineEnding::None,
@@ -1068,8 +1068,8 @@ fn terminal_scroll(
         ui.set_min_height(outer_h);
         ui.set_max_height(outer_h);
         Frame::NONE
-            .fill(Color32::from_rgb(4, 6, 10))
-            .stroke(Stroke::new(0.75, theme::SIM_BORDER))
+            .fill(theme::search_bg())
+            .stroke(Stroke::new(0.75, theme::sim_border()))
             .inner_margin(Margin::symmetric(8, 8))
             .corner_radius(CornerRadius::same(4))
             .show(ui, |ui| {
@@ -1087,7 +1087,7 @@ fn terminal_scroll(
                                     .monospace()
                                     .size(12.0)
                                     .line_height(Some(15.0))
-                                    .color(theme::START_GREEN_DIM),
+                                    .color(theme::accent_dim()),
                             )
                             .wrap(),
                         );
@@ -1108,14 +1108,14 @@ fn uart_send_row(
         RichText::new(label)
             .monospace()
             .size(10.5)
-            .color(theme::ACCENT_DIM),
+            .color(theme::accent_dim()),
     );
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let te_width = ((ui.available_width() - 78.0).max(40.0)).min(HOST_RX_SEND_MAX_W);
         Frame::NONE
-            .fill(theme::SIM_SURFACE_LIFT)
-            .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+            .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+            .stroke(Stroke::new(1.0, theme::sim_border_bright()))
             .inner_margin(Margin::symmetric(6, 4))
             .corner_radius(CornerRadius::same(4))
             .show(ui, |ui| {
@@ -1130,9 +1130,9 @@ fn uart_send_row(
             });
         if ui
             .add(
-                Button::new(RichText::new("Send").monospace().size(11.0).color(theme::ACCENT))
-                    .fill(theme::SIM_SURFACE_LIFT)
-                    .stroke(Stroke::new(1.0, theme::SIM_BORDER_BRIGHT))
+                Button::new(RichText::new("Send").monospace().size(11.0).color(theme::accent()))
+                    .fill(theme::panel_over_wallpaper(ui.ctx(), theme::sim_surface_lift()))
+                    .stroke(Stroke::new(1.0, theme::sim_border_bright()))
                     .corner_radius(CornerRadius::same(5)),
             )
             .clicked()
